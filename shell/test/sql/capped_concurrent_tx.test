@@ -1,0 +1,68 @@
+# name: test/sql/capped_concurrent_tx.test
+# description: overlapping transactions from separate connections must not clobber each other
+# group: [sql]
+
+# Each connection gets its own transaction from the manager. With a single
+# ownership slot (the M14 bug), conB's start destroyed conA's still-live
+# transaction, and conA's COMMIT then flushed freed buffers — SIGSEGV in
+# CappedTransaction::FlushAll under concurrent OTLP ingest + sealer.
+
+require capped
+
+require parquet
+
+statement ok
+ATTACH '__TEST_DIR__/capped_cts_store' AS cts (TYPE capped)
+
+statement ok
+CREATE TABLE cts.main.logs(ts TIMESTAMPTZ, body VARCHAR) WITH (time_col='ts', ttl='36500 days', max_bytes='1GB')
+
+statement ok conA
+BEGIN
+
+statement ok conA
+INSERT INTO cts.main.logs VALUES (TIMESTAMPTZ '2026-11-01 00:00:00+00', 'a')
+
+statement ok conB
+BEGIN
+
+statement ok conB
+INSERT INTO cts.main.logs VALUES (TIMESTAMPTZ '2026-11-01 00:00:01+00', 'b')
+
+statement ok conA
+COMMIT
+
+statement ok conB
+COMMIT
+
+query I
+SELECT count(*) FROM cts.main.logs
+----
+2
+
+# rollback path: conA's discarded rows must not leak, and must not take conB
+# (whose transaction overlaps conA's) down with them
+statement ok conA
+BEGIN
+
+statement ok conA
+INSERT INTO cts.main.logs VALUES (TIMESTAMPTZ '2026-11-01 00:00:02+00', 'dropped')
+
+statement ok conB
+BEGIN
+
+statement ok conA
+ROLLBACK
+
+statement ok conB
+COMMIT
+
+query I
+SELECT count(*) FROM cts.main.logs
+----
+2
+
+query I
+SELECT count(*) FROM cts.main.logs WHERE body = 'dropped'
+----
+0

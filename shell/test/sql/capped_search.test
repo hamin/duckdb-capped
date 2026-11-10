@@ -1,0 +1,296 @@
+# name: test/sql/capped_search.test
+# description: search indexes over sealed capped segments (fts BM25 + HNSW)
+# group: [sql]
+
+require capped
+
+require parquet
+
+# fts and vss are deliberately not `require`d: they are remote extensions in
+# DuckDB 1.5, so the runner can only satisfy `require` for code statically linked
+# into the unittest binary, and with an out-of-tree build that never happens —
+# the whole file then reports "skipped" and tests nothing. Loading them here
+# makes the suite either run or fail loudly, which is the honest outcome for a
+# suite that cannot work without them (LOAD is a no-op when they are linked in).
+statement ok
+LOAD fts
+
+statement ok
+LOAD vss
+
+# Parquet stays the source of truth for analytics: a segment is a parquet file
+# read by DuckDB's own reader. A table that opts in also gets, per *sealed*
+# segment, a sibling index file holding the searchable columns plus a BM25 fts
+# index and HNSW vector indexes. That index is derived data — built at seal,
+# deleted with the segment, rebuildable with capped_index, and never load-bearing
+# for writes, scans or retention.
+
+statement ok
+ATTACH '__TEST_DIR__/capped_search_store' AS ss (TYPE capped)
+
+# --- the options are validated where they can still be fixed ------------------
+
+statement error
+CREATE TABLE ss.main.nope(x VARCHAR) WITH (max_rows='10', search_columns='missing')
+----
+no column 'missing'
+
+statement error
+CREATE TABLE ss.main.nope(x VARCHAR) WITH (max_rows='10', vector_columns='x')
+----
+fixed-size float array
+
+statement error
+CREATE TABLE ss.main.nope(x VARCHAR) WITH (max_rows='10', search_columns='x', vector_metric='manhattan')
+----
+vector_metric
+
+statement error
+CREATE TABLE ss.main.nope(x VARCHAR) WITH (max_rows='10', search_columns='x,x')
+----
+indexed more than once
+
+# a table with no search columns at all, for the "cannot search this" errors
+statement ok
+CREATE TABLE ss.main.plain(name VARCHAR, value DOUBLE) WITH (max_rows='100')
+
+# --- a searchable table -------------------------------------------------------
+
+statement ok
+CREATE TABLE ss.main.slogs(level VARCHAR, msg VARCHAR, embedding FLOAT[4])
+    WITH (max_rows='100', search_columns='msg,level', vector_columns='embedding', vector_metric='cosine')
+
+# the declared vector shape survives the manifest round trip into the catalog
+query TT
+SELECT column_name, column_type FROM (DESCRIBE ss.main.slogs) ORDER BY 1
+----
+embedding	FLOAT[4]
+level	VARCHAR
+msg	VARCHAR
+
+statement ok
+INSERT INTO ss.main.slogs VALUES
+  ('error','connection timed out waiting for the payment gateway', [1.0,0.0,0.0,0.0]::FLOAT[4]),
+  ('info','request completed successfully in 12ms', [0.0,1.0,0.0,0.0]::FLOAT[4]),
+  ('error','panic: connection pool exhausted', [0.0,0.0,1.0,0.0]::FLOAT[4])
+
+# the open segment is not indexed: it is rewritten on every commit, so an index
+# on it would be rebuilt constantly (or be stale)
+query I
+SELECT count(*) FROM capped_status('ss', 'slogs') WHERE indexed
+----
+0
+
+statement error
+SELECT * FROM capped_fts('ss', 'slogs', 'timed')
+----
+no searchable sealed segments
+
+statement ok
+SELECT * FROM capped_seal('ss', 'slogs')
+
+# sealing built the index, and status reports its footprint separately from the
+# segment's bytes — indexes are overhead the caps deliberately do not count
+query IIT
+SELECT sealed, indexed, index_bytes > 0 FROM capped_status('ss', 'slogs')
+----
+true	true	true
+
+query III
+SELECT sealed, indexed, index_bytes > 0 FROM capped_tables('ss') WHERE table_name = 'slogs'
+----
+1	1	true
+
+# --- full-text search --------------------------------------------------------
+
+query II
+SELECT level, msg FROM capped_fts('ss', 'slogs', 'timed out') ORDER BY score DESC
+----
+error	connection timed out waiting for the payment gateway
+
+query I
+SELECT count(*) FROM capped_fts('ss', 'slogs', 'connection')
+----
+2
+
+query I
+SELECT count(*) FROM capped_fts('ss', 'slogs', 'no such words here')
+----
+0
+
+# k is the size of the table-wide answer, not of each segment's list
+query I
+SELECT count(*) FROM capped_fts('ss', 'slogs', 'connection', k := 1)
+----
+1
+
+# hits carry the searchable columns, so a result is readable on its own
+query ITT
+SELECT row_id > 0, segment_id, level FROM capped_fts('ss', 'slogs', 'panic')
+----
+true	0	error
+
+# --- vector search -----------------------------------------------------------
+
+# the query vector points at the second row, so that row ranks first under cosine
+query T
+SELECT level FROM capped_vector_search('ss', 'slogs', [0.0,1.0,0.0,0.0]::FLOAT[4]) LIMIT 1
+----
+info
+
+# every row gets scored; a plain list is as good as a FLOAT[4] here
+query I
+SELECT count(*) FROM capped_vector_search('ss', 'slogs', [0.0,1.0,0.0,0.0])
+----
+3
+
+# scores are distances under cosine, so the winner is the closest to zero
+query T
+SELECT score < 0.01 FROM capped_vector_search('ss', 'slogs', [0.0,1.0,0.0,0.0]::FLOAT[4]) LIMIT 1
+----
+true
+
+# the query vector must match the indexed width, and name a vector column
+statement error
+SELECT * FROM capped_vector_search('ss', 'slogs', [0.0,1.0]::FLOAT[2])
+----
+the query vector has 2 value(s)
+
+statement error
+SELECT * FROM capped_vector_search('ss', 'slogs', [0.0,1.0,0.0,0.0]::FLOAT[4], vector_column := 'msg')
+----
+not 'msg'
+
+# a table with no index of that kind says so at bind time rather than quietly
+# returning nothing
+statement error
+SELECT * FROM capped_fts('ss', 'plain', 'anything')
+----
+no full-text search columns
+
+statement error
+SELECT * FROM capped_vector_search('ss', 'plain', [0.0,1.0,0.0,0.0]::FLOAT[4])
+----
+no vector columns
+
+# --- the table-wide top k is merged across segments -------------------------
+#
+# Each sidecar only knows its own segment, so every segment is asked for its own
+# best k and the lists are merged. One segment per match proves the merge is what
+# decides the answer rather than whichever segment happened to be read first.
+
+statement ok
+CREATE TABLE ss.main.merge(level VARCHAR, msg VARCHAR) WITH (max_rows='100', search_columns='msg')
+
+statement ok
+INSERT INTO ss.main.merge VALUES ('error','zeta zeta zeta zeta')
+
+statement ok
+SELECT * FROM capped_seal('ss', 'merge')
+
+statement ok
+INSERT INTO ss.main.merge VALUES ('error','zeta')
+
+statement ok
+SELECT * FROM capped_seal('ss', 'merge')
+
+statement ok
+INSERT INTO ss.main.merge VALUES ('error','zeta zeta zeta')
+
+statement ok
+SELECT * FROM capped_seal('ss', 'merge')
+
+query II
+SELECT count(*) AS hits, count(DISTINCT segment_id) AS segments
+FROM capped_fts('ss', 'merge', 'zeta', k := 2)
+----
+2	2
+
+# the two best documents, not the two first segments
+query ITT
+SELECT segment_id, msg, score > 0 FROM capped_fts('ss', 'merge', 'zeta', k := 2) ORDER BY score DESC
+----
+0	zeta zeta zeta zeta	true
+2	zeta zeta zeta	true
+
+# without the cap, all three segments answer
+query I
+SELECT count(*) FROM capped_fts('ss', 'merge', 'zeta')
+----
+3
+
+# --- maintenance -------------------------------------------------------------
+
+query ITT
+SELECT count(*), bool_and(build_error IS NULL), bool_and(indexed) FROM capped_index('ss', 'slogs')
+----
+1	true	true
+
+query I
+SELECT count(*) FROM capped_index('ss', 'slogs', rebuild := true) WHERE indexed
+----
+1
+
+# a table that never asked for search is not an error, just nothing to do
+query I
+SELECT bool_and(build_error IS NULL) FROM capped_index('ss', 'plain')
+----
+true
+
+# --- the index follows retention ---------------------------------------------
+#
+# Evicting a segment deletes its index with it, so search can never surface data
+# that retention already removed.
+
+statement ok
+CREATE TABLE ss.main.sevict(level VARCHAR, msg VARCHAR) WITH (max_rows='2', search_columns='msg')
+
+statement ok
+INSERT INTO ss.main.sevict VALUES ('error','alpha timeout')
+
+statement ok
+SELECT * FROM capped_seal('ss', 'sevict')
+
+statement ok
+INSERT INTO ss.main.sevict VALUES ('error','beta timeout')
+
+statement ok
+SELECT * FROM capped_seal('ss', 'sevict')
+
+statement ok
+INSERT INTO ss.main.sevict VALUES ('error','gamma timeout')
+
+# the third row pushed the table over max_rows, so the oldest sealed segment is
+# gone — and its index went with it
+query II
+SELECT count(*) FILTER (WHERE sealed) AS sealed, count(*) FILTER (WHERE indexed) AS indexed
+FROM capped_status('ss', 'sevict')
+----
+1	1
+
+# the scan sees both surviving rows; search sees only the sealed one, because the
+# open segment has no index by design
+query I
+SELECT count(*) FROM ss.main.sevict
+----
+2
+
+query IT
+SELECT count(*) AS hits, max(msg) FROM capped_fts('ss', 'sevict', 'timeout')
+----
+1	beta timeout
+
+statement ok
+DROP TABLE ss.main.slogs
+
+statement ok
+DROP TABLE ss.main.merge
+
+statement ok
+DROP TABLE ss.main.sevict
+
+statement ok
+DROP TABLE ss.main.plain
+
+statement ok
+DETACH ss

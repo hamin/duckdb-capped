@@ -1,0 +1,482 @@
+# name: test/sql/capped.test
+# description: capped storage extension smoke test
+# group: [sql]
+
+require capped
+
+require parquet
+
+statement ok
+ATTACH '__TEST_DIR__/capped_store' AS cs (TYPE capped)
+
+statement ok
+CREATE TABLE cs.main.events(ts TIMESTAMPTZ, severity VARCHAR, service VARCHAR, body VARCHAR) WITH (time_col='ts', ttl='36500 days', max_bytes='1GB')
+
+statement ok
+SHOW TABLES FROM cs.main
+
+statement ok
+CREATE TABLE cs.main.metrics(ts TIMESTAMPTZ, name VARCHAR, value DOUBLE) WITH (time_col='ts', ttl='30 days')
+
+statement error
+CREATE TABLE cs.main.uncapped(x INTEGER)
+----
+at least one cap
+
+# M1b: scans read the sealed segments named by the manifest; none yet => empty
+query I
+SELECT count(*) FROM cs.main.events
+----
+0
+
+# adopt parquet files as sealed segments (bulk-ingest path; INSERT joins in M1c)
+statement ok
+COPY (SELECT * FROM (VALUES (TIMESTAMPTZ '2026-11-01 10:00:00+00', 'info', 'auth', 'started'), (TIMESTAMPTZ '2026-11-01 10:00:01+00', 'error', 'auth', 'boom'), (TIMESTAMPTZ '2026-11-01 10:00:02+00', 'info', 'api', 'ok')) AS t(ts, severity, service, body)) TO '__TEST_DIR__/capped_store/events/0.seg.parquet' (FORMAT parquet)
+
+statement ok
+COPY (SELECT * FROM (VALUES (TIMESTAMPTZ '2026-11-02 09:00:00+00', 'warn', 'api', 'slow')) AS t(ts, severity, service, body)) TO '__TEST_DIR__/capped_store/events/1.seg.parquet' (FORMAT parquet)
+
+statement ok
+SELECT * FROM capped_add_segment('cs', 'events', 'events/0.seg.parquet')
+
+statement ok
+SELECT * FROM capped_add_segment('cs', 'events', 'events/1.seg.parquet')
+
+query I
+SELECT count(*) FROM cs.main.events
+----
+4
+
+query I
+SELECT count(*) FROM cs.main.events WHERE severity = 'error'
+----
+1
+
+query II
+SELECT service, body FROM cs.main.events WHERE body = 'boom'
+----
+auth	boom
+
+query I
+SELECT count(*) FROM cs.main.events WHERE ts >= TIMESTAMPTZ '2026-11-02 00:00:00+00'
+----
+1
+
+# --- M1c: insert path ---------------------------------------------------------
+
+statement ok
+CREATE TABLE cs.main.logs(ts TIMESTAMPTZ, level VARCHAR, msg VARCHAR) WITH (time_col='ts', ttl='36500 days')
+
+statement ok
+INSERT INTO cs.main.logs VALUES (TIMESTAMPTZ '2026-11-07 00:00:00+00', 'info', 'a'), (TIMESTAMPTZ '2026-11-07 00:00:01+00', 'error', 'b')
+
+statement ok
+INSERT INTO cs.main.logs SELECT TIMESTAMPTZ '2026-11-07 00:00:02+00', 'warn', 'c' || CAST(i AS VARCHAR) FROM range(3) t(i)
+
+query I
+SELECT count(*) FROM cs.main.logs
+----
+5
+
+# every committed row lives in one open (unsealed) segment until sealed
+query II
+SELECT segment_id, sealed::VARCHAR FROM capped_status('cs', 'logs')
+----
+0	false
+
+statement ok
+SELECT * FROM capped_seal('cs', 'logs')
+
+query II
+SELECT segment_id, sealed::VARCHAR FROM capped_status('cs', 'logs')
+----
+0	true
+
+# inserts after a seal start a new open segment; scans span both
+statement ok
+INSERT INTO cs.main.logs VALUES (TIMESTAMPTZ '2026-11-07 00:00:09+00', 'info', 'late')
+
+query I
+SELECT count(*) FROM cs.main.logs
+----
+6
+
+query III
+SELECT segment_id, sealed::VARCHAR, rows FROM capped_status('cs', 'logs') ORDER BY segment_id
+----
+0	true	5
+1	false	1
+
+# rollback discards buffered inserts
+statement ok
+BEGIN TRANSACTION
+
+statement ok
+INSERT INTO cs.main.logs VALUES (TIMESTAMPTZ '2026-11-07 00:00:10+00', 'info', 'rolled-back')
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM cs.main.logs
+----
+6
+
+# hard caps: on_violation => block rejects commits that cannot fit
+statement ok
+CREATE TABLE cs.main.bounded(ts TIMESTAMPTZ, v INT) WITH (time_col='ts', max_rows='3', on_violation='block')
+
+statement ok
+INSERT INTO cs.main.bounded VALUES (TIMESTAMPTZ '2026-11-07 00:00:00+00', 1), (TIMESTAMPTZ '2026-11-07 00:00:01+00', 2), (TIMESTAMPTZ '2026-11-07 00:00:02+00', 3)
+
+statement error
+INSERT INTO cs.main.bounded VALUES (TIMESTAMPTZ '2026-11-07 00:00:03+00', 4)
+----
+hard cap
+
+query I
+SELECT count(*) FROM cs.main.bounded
+----
+3
+
+# eviction: TTL drops sealed segments; the open segment is never evicted
+statement ok
+CREATE TABLE cs.main.shortlived(ts TIMESTAMPTZ, v INT) WITH (time_col='ts', ttl='1 second')
+
+statement ok
+INSERT INTO cs.main.shortlived VALUES (TIMESTAMPTZ '2020-01-01 00:00:00+00', 1)
+
+query I
+SELECT count(*) FROM cs.main.shortlived
+----
+1
+
+statement ok
+SELECT * FROM capped_seal('cs', 'shortlived')
+
+query I
+SELECT count(*) FROM cs.main.shortlived
+----
+0
+
+# --- M2a: read-your-writes guard ---------------------------------------------
+
+# reading a table this transaction inserted into fails loudly, rather than
+# silently omitting the still-buffered rows
+statement ok
+BEGIN TRANSACTION
+
+statement ok
+INSERT INTO cs.main.logs VALUES (TIMESTAMPTZ '2026-11-07 00:00:11+00', 'info', 'uncommitted')
+
+statement error
+SELECT count(*) FROM cs.main.logs
+----
+not supported
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM cs.main.logs
+----
+6
+
+# --- M2a: on-demand enforcement ----------------------------------------------
+
+# an open (unsealed) segment is never evicted, even when fully expired;
+# it is rotated first by seal (automatic or capped_seal), then dropped
+statement ok
+CREATE TABLE cs.main.idle(ts TIMESTAMPTZ, v INT) WITH (time_col='ts', ttl='1 second')
+
+statement ok
+INSERT INTO cs.main.idle VALUES (TIMESTAMPTZ '2020-01-01 00:00:00+00', 1), (TIMESTAMPTZ '2020-01-01 00:00:01+00', 2)
+
+query I
+SELECT count(*) FROM cs.main.idle
+----
+2
+
+query III
+SELECT * FROM capped_enforce('cs', 'idle')
+----
+idle	0	false
+
+query I
+SELECT count(*) FROM cs.main.idle
+----
+2
+
+# capped_seal rotates + enforces in one step: the expired segment goes
+statement ok
+SELECT * FROM capped_seal('cs', 'idle')
+
+query I
+SELECT count(*) FROM cs.main.idle
+----
+0
+
+query III
+SELECT * FROM capped_enforce('cs', 'idle')
+----
+idle	0	false
+
+# store-wide variant: one row per table, and nothing left over budget
+query I
+SELECT (SELECT count(*) FROM capped_enforce('cs')) = (SELECT count(*) FROM capped_tables('cs'))
+----
+true
+
+query I
+SELECT count(*) FROM capped_enforce('cs') WHERE segments_dropped > 0 OR open_sealed
+----
+0
+
+# --- M2a: capped_tables overview ---------------------------------------------
+
+query IIIII
+SELECT segments, sealed, open::VARCHAR, rows, time_col FROM capped_tables('cs') WHERE table_name = 'logs'
+----
+2	1	true	6	ts
+
+query I
+SELECT bytes > 0 FROM capped_tables('cs') WHERE table_name = 'logs'
+----
+true
+
+# the caps themselves (regression: positive JSON integers are yyjson's *uint*
+# subtype, and an is_sint() check used to report every cap as NULL)
+query IIII
+SELECT ttl_us, max_bytes, max_rows, on_violation FROM capped_tables('cs') WHERE table_name = 'events'
+----
+3153600000000000	1000000000	NULL	evict
+
+query III
+SELECT ttl_us, max_bytes, max_rows FROM capped_tables('cs') WHERE table_name = 'bounded'
+----
+NULL	NULL	3
+
+query IIII
+SELECT ttl_us, max_bytes, max_rows, evict_order FROM capped_status('cs', 'bounded') LIMIT 1
+----
+NULL	NULL	3	time
+
+# --- M2a: ATTACH applies retention (idle stores) ------------------------------
+
+statement ok
+DETACH cs
+
+statement ok
+ATTACH '__TEST_DIR__/capped_store' AS cs (TYPE capped)
+
+query I
+SELECT count(*) FROM cs.main.logs
+----
+6
+
+query I
+SELECT count(*) FROM cs.main.idle
+----
+0
+
+statement ok
+DROP TABLE cs.main.idle
+
+statement ok
+DROP TABLE cs.main.logs
+
+statement ok
+DROP TABLE cs.main.bounded
+
+statement ok
+DROP TABLE cs.main.shortlived
+
+statement ok
+DROP TABLE cs.main.metrics
+
+statement ok
+DROP TABLE cs.main.events
+
+statement error
+SELECT count(*) FROM cs.main.events
+----
+does not exist
+
+# --- time sources and segment age ---------------------------------------------
+# A table ages either by an explicit time_col, or by the store's hidden
+# _ingest_ts (no time_col: age == commit time). Absence of a time is never
+# treated as epoch — inventing a bound once made retention delete live data.
+
+# ingest time: age = commit time
+statement ok
+CREATE TABLE cs.main.ingest(level VARCHAR, msg VARCHAR) WITH (ttl='1 hour')
+
+# the hidden column is not part of the table users see, so INSERT keeps its
+# natural arity and SELECT * stays clean
+query TT
+SELECT column_name, column_type FROM (DESCRIBE cs.main.ingest) ORDER BY 1
+----
+level	VARCHAR
+msg	VARCHAR
+
+statement ok
+INSERT INTO cs.main.ingest VALUES ('info','a'), ('error','b')
+
+statement ok
+SELECT * FROM capped_seal('cs', 'ingest')
+
+# rows that just arrived are not ancient: nothing to drop
+statement ok
+SELECT * FROM capped_enforce('cs', 'ingest')
+
+query I
+SELECT count(*) FROM cs.main.ingest
+----
+2
+
+query ITT
+SELECT rows, time_col, CASE WHEN min_ts_us IS NOT NULL AND max_ts_us IS NOT NULL THEN 'known' ELSE 'missing' END
+FROM capped_status('cs', 'ingest')
+----
+2	_ingest_ts	known
+
+statement error
+SELECT _ingest_ts FROM cs.main.ingest
+----
+not found
+
+# and the name stays reserved for the store
+statement error
+CREATE TABLE cs.main.hack(_ingest_ts TIMESTAMPTZ, v INT) WITH (max_rows='10')
+----
+maintained by the store
+
+# no age signal at all: a bulk file with neither the policy's time column nor an
+# arrival time gets *no* bounds, so it is never age-droppable (the size and
+# count caps still apply to it)
+statement ok
+COPY (SELECT 'bulk' AS level, 'no arrival time' AS msg)
+    TO '__TEST_DIR__/capped_store/ingest/9.seg.parquet' (FORMAT parquet)
+
+statement ok
+SELECT * FROM capped_add_segment('cs', 'ingest', 'ingest/9.seg.parquet')
+
+query T
+SELECT CASE WHEN min_ts_us IS NULL AND max_ts_us IS NULL THEN 'unknown' ELSE 'set' END
+FROM capped_status('cs', 'ingest') WHERE path = 'ingest/9.seg.parquet'
+----
+unknown
+
+statement ok
+SELECT * FROM capped_enforce('cs', 'ingest')
+
+query I
+SELECT count(*) FROM cs.main.ingest
+----
+3
+
+# ... while a bulk file that does carry an ancient arrival time is evicted by
+# age (add_segment enforces, so it is already gone)
+statement ok
+COPY (SELECT 'old' AS level, 'arrived in 2020' AS msg, TIMESTAMPTZ '2020-01-01 00:00:00+00' AS _ingest_ts)
+    TO '__TEST_DIR__/capped_store/ingest/8.seg.parquet' (FORMAT parquet)
+
+statement ok
+SELECT * FROM capped_add_segment('cs', 'ingest', 'ingest/8.seg.parquet')
+
+query I
+SELECT count(*) FROM capped_status('cs', 'ingest') WHERE path = 'ingest/8.seg.parquet'
+----
+0
+
+query I
+SELECT count(*) FROM cs.main.ingest
+----
+3
+
+# DuckDB's parquet reader needs one uniform schema across a table's segments, so
+# adopting a file with other columns is refused rather than poisoning the table
+statement ok
+COPY (SELECT 1 AS a, 'x' AS b) TO '__TEST_DIR__/capped_store/ingest/7.seg.parquet' (FORMAT parquet)
+
+statement error
+SELECT * FROM capped_add_segment('cs', 'ingest', 'ingest/7.seg.parquet')
+----
+expects [level, msg]
+
+query I
+SELECT count(*) FROM cs.main.ingest
+----
+3
+
+# a time column whose values never read as timestamps fails loudly, at the
+# write that would have produced an unusable segment
+statement ok
+CREATE TABLE cs.main.badtime(ts VARCHAR, v INT) WITH (time_col='ts', max_rows='10')
+
+statement error
+INSERT INTO cs.main.badtime VALUES ('not a timestamp', 1), ('also not', 2)
+----
+no readable timestamps
+
+# ... while a text column that does parse yields real bounds
+statement ok
+CREATE TABLE cs.main.timestr(ts VARCHAR, v INT) WITH (time_col='ts', max_rows='10')
+
+statement ok
+INSERT INTO cs.main.timestr VALUES ('2026-11-07 00:00:00+00', 1), ('2026-11-07 00:00:05+00', 2)
+
+query I
+SELECT count(*) FROM cs.main.timestr
+----
+2
+
+query T
+SELECT CASE WHEN min_ts_us IS NOT NULL AND max_ts_us IS NOT NULL THEN 'known' ELSE 'missing' END
+FROM capped_status('cs', 'timestr')
+----
+known
+
+statement ok
+DROP TABLE cs.main.badtime
+
+# --- M2b: background enforcement ATTACH option --------------------------------
+
+# a store with a short enforce_interval runs its thread the whole time it is
+# attached; the DETACH below must join it cleanly
+statement ok
+ATTACH '__TEST_DIR__/capped_store_bg' AS cb (TYPE capped, enforce_interval '1 second')
+
+statement ok
+CREATE TABLE cb.main.t(ts TIMESTAMPTZ, v INT) WITH (time_col='ts', ttl='36500 days')
+
+statement ok
+INSERT INTO cb.main.t VALUES (TIMESTAMPTZ '2026-11-07 00:00:00+00', 1)
+
+query I
+SELECT count(*) FROM cb.main.t
+----
+1
+
+statement ok
+DETACH cb
+
+# 0 disables the thread; plain ATTACH uses the 60s default
+statement ok
+ATTACH '__TEST_DIR__/capped_store_bg_off' AS cb (TYPE capped, enforce_interval '0')
+
+statement ok
+DETACH cb
+
+statement error
+ATTACH '__TEST_DIR__/capped_store_bg_bad' AS cb (TYPE capped, enforce_interval 'banana')
+----
+invalid enforce_interval
+
+statement error
+ATTACH '__TEST_DIR__/capped_store_bg_typo' AS cb (TYPE capped, enforce_intervalx '1 second')
+----
+unknown option
+
+statement ok
+DETACH cs

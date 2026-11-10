@@ -1,0 +1,11 @@
+# Rust (crates/)
+target/
+
+# DuckDB extension build tree
+shell/build/
+shell/.cache/
+shell/duckdb_unittest_tempdir/
+shell/testext/
+
+# OS
+.DS_Store

@@ -1,0 +1,6 @@
+[submodule "shell/duckdb"]
+	path = shell/duckdb
+	url = https://github.com/duckdb/duckdb
+[submodule "shell/extension-ci-tools"]
+	path = shell/extension-ci-tools
+	url = https://github.com/duckdb/extension-ci-tools
