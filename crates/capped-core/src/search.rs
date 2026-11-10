@@ -123,15 +123,23 @@ impl SearchSpec {
             vector_columns: Vec::new(),
             metric: self.metric,
         };
+        let mut has_text = false;
         for name in &self.columns {
             let n = take(name, "full-text search")?.expect("checked above");
             let ty = resolve(&n).expect("resolved in take()").ty;
-            if !is_varchar(&ty) {
+            if is_varchar(&ty) {
+                has_text = true;
+            } else if !is_display_castable(&ty) {
                 return Err(format!(
-                    "full-text column '{n}' has type '{ty}'; full-text search needs a VARCHAR column"
+                    "full-text column '{n}' has type '{ty}'; full-text search needs a VARCHAR column (a display column like TIMESTAMP/numeric is carried as text but not tokenized)"
                 ));
             }
             out.columns.push(n);
+        }
+        if !out.columns.is_empty() && !has_text {
+            return Err(format!(
+                "capped table '{table}' indexes only non-text columns for full-text search; at least one VARCHAR column is tokenized, the rest are carried for display"
+            ));
         }
         for name in &self.vector_columns {
             let n = take(name, "vector search")?.expect("checked above");
@@ -153,6 +161,36 @@ fn is_varchar(ty: &str) -> bool {
     matches!(
         ty.trim().to_ascii_uppercase().as_str(),
         "VARCHAR" | "TEXT" | "STRING"
+    )
+}
+
+/// Types that are not tokenized but may be carried through the index as
+/// `CAST(col AS VARCHAR)`, so a search hit is readable without joining back
+/// to the segment — a log line wants its timestamp. Restricted to types with
+/// a stable, unambiguous text rendering; lists/structs/blobs are excluded.
+fn is_display_castable(ty: &str) -> bool {
+    matches!(
+        ty.trim().to_ascii_uppercase().as_str(),
+        "TIMESTAMP"
+            | "TIMESTAMPTZ"
+            | "TIMESTAMP WITH TIME ZONE"
+            | "DATE"
+            | "TIME"
+            | "TIMETZ"
+            | "BIGINT"
+            | "INTEGER"
+            | "SMALLINT"
+            | "TINYINT"
+            | "HUGEINT"
+            | "UBIGINT"
+            | "UINTEGER"
+            | "USMALLINT"
+            | "UTINYINT"
+            | "DOUBLE"
+            | "REAL"
+            | "FLOAT"
+            | "BOOLEAN"
+            | "UUID"
     )
 }
 
@@ -270,10 +308,24 @@ mod tests {
             ..Default::default()
         })
         .contains("needs a fixed-size float array"));
+        // a TIMESTAMP alone would leave BM25 nothing to tokenize
         assert!(err(SearchSpec {
             columns: vec!["ts".into()],
             ..Default::default()
         })
+        .contains("at least one VARCHAR"));
+        // blob has no useful text rendering at all
+        let mut with_blob = cols();
+        with_blob.push(Column {
+            name: "raw".into(),
+            ty: "BLOB".into(),
+        });
+        assert!(SearchSpec {
+            columns: vec!["raw".into(), "body".into()],
+            ..Default::default()
+        }
+        .validate("t", &with_blob)
+        .unwrap_err()
         .contains("needs a VARCHAR column"));
         // the store's own columns are off limits — and they only show up in the
         // schema of a table that actually has one (an ingest-time table)
@@ -306,6 +358,28 @@ mod tests {
         for ty in ["TEXT[]", "INTEGER", "BLOB", "TIMESTAMPTZ"] {
             assert!(!is_varchar(ty), "{ty} is not text");
         }
+        // carried for display (cast to VARCHAR at index time) but not tokenized
+        for ty in ["TIMESTAMP", "TIMESTAMPTZ", "DATE", "BIGINT", "DOUBLE", "BOOLEAN", "UUID"] {
+            assert!(is_display_castable(ty), "{ty} should be a display column");
+            assert!(!is_varchar(ty), "{ty} must not be tokenized");
+        }
+        // composite/unrenderable types stay out
+        for ty in ["BLOB", "INTEGER[]", "STRUCT(a INT)", "MAP(VARCHAR, INT)"] {
+            assert!(!is_display_castable(ty), "{ty} is not display-castable");
+        }
+    }
+
+    #[test]
+    fn display_columns_may_mingle_with_text() {
+        // a log line is readable from the hit alone: ts is carried, body is
+        // what BM25 actually matches on
+        let spec = SearchSpec {
+            columns: vec!["ts".into(), "body".into()],
+            ..Default::default()
+        }
+        .validate("t", &cols())
+        .unwrap();
+        assert_eq!(spec.columns, vec!["ts", "body"]);
     }
 
     #[test]

@@ -25,6 +25,10 @@ namespace duckdb {
 //   <text>   VARCHAR  the search_columns, for BM25
 //   <vector> FLOAT[N] the vector_columns, for HNSW
 //
+// Non-text search columns (validated display-castable by the core, e.g. a
+// log's TIMESTAMP) are also stored here as VARCHAR — carried so a hit renders
+// without touching the segment, but left out of the BM25 index.
+//
 // plus fts_main_idx_2 (the index schema fts creates) and one hnsw index per
 // vector column. Row ids are reproducible because DuckDB reads a parquet file
 // in a fixed order, which is what makes a hit addressable later.
@@ -56,6 +60,15 @@ string Trimmed(const string &value) {
 	auto copy = value;
 	StringUtil::Trim(copy);
 	return copy;
+}
+
+//! Does the manifest declare this as a text type fts can tokenize? Non-text
+//! search columns are validated as display-castable by the core and arrive
+//! here already cast to VARCHAR; they render in hits but are not indexed.
+bool IsTextType(const string &type) {
+	auto t = Trimmed(type);
+	StringUtil::Upper(t);
+	return t == "VARCHAR" || t == "TEXT" || t == "STRING";
 }
 
 string ScalarString(Connection &con, const string &sql) {
@@ -222,6 +235,11 @@ bool BuildSegmentIndex(CappedCatalog &catalog, const CappedSegmentInfo &seg, con
 			// and the cast has to be named back, or the column lands as CAST(...)
 			// and CREATE INDEX cannot find it
 			select_list += "::" + col.type + " AS " + CappedQuoteIdent(col.name);
+		} else if (!IsTextType(col.type)) {
+			// display-only search column (e.g. a log's timestamp): carried through
+			// as text so a hit renders on its own, but kept out of the BM25
+			// pragma below so its digits never pollute relevance
+			select_list += "::VARCHAR AS " + CappedQuoteIdent(col.name);
 		}
 	}
 	auto create = "CREATE TABLE " + CappedQuoteIdent(table) + " AS SELECT row_number() OVER () AS _rid, " +
@@ -234,7 +252,7 @@ bool BuildSegmentIndex(CappedCatalog &catalog, const CappedSegmentInfo &seg, con
 	if (wants_text) {
 		string cols;
 		for (auto &col : columns) {
-			if (!col.vector_column) {
+			if (!col.vector_column && IsTextType(col.type)) {
 				cols += ", " + CappedQuoteLit(col.name);
 			}
 		}

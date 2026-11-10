@@ -280,6 +280,56 @@ SELECT count(*) AS hits, max(msg) FROM capped_fts('ss', 'sevict', 'timeout')
 ----
 1	beta timeout
 
+# --- display columns: carried, not tokenized ---------------------------------
+#
+# A log line is readable from the hit alone when the sidecar also carries the
+# timestamp — but BM25 must not index the timestamp's digits, or "2026" would
+# match every row sealed in 2026.
+
+statement ok
+CREATE TABLE ss.main.slogs2(ts TIMESTAMP, level VARCHAR, msg VARCHAR)
+    WITH (max_rows='100', search_columns='ts,level,msg')
+
+statement ok
+INSERT INTO ss.main.slogs2 VALUES
+  ('2026-11-01 10:00:00','error','connection timed out waiting for payment'),
+  ('2026-11-01 10:00:01','info','payment request completed in 12ms')
+
+statement ok
+SELECT * FROM capped_seal('ss', 'slogs2')
+
+# the hit renders: ts arrived as text without touching the segment
+query ITT
+SELECT ts, level, msg FROM capped_fts('ss', 'slogs2', 'timed out')
+----
+2026-11-01 10:00:00	error	connection timed out waiting for payment
+
+# the timestamp text is stored but not tokenized: only the message matches
+query I
+SELECT count(*) FROM capped_fts('ss', 'slogs2', '2026')
+----
+0
+
+query I
+SELECT count(*) FROM capped_fts('ss', 'slogs2', 'payment')
+----
+2
+
+# a display-only spec would leave BM25 nothing to match on; blob has no
+# useful text rendering at all — both refuse at CREATE
+statement error
+CREATE TABLE ss.main.disponly(ts TIMESTAMP) WITH (max_rows='100', search_columns='ts')
+----
+at least one VARCHAR
+
+statement error
+CREATE TABLE ss.main.blobish(b BLOB, x VARCHAR) WITH (max_rows='100', search_columns='b,x')
+----
+needs a VARCHAR column
+
+statement ok
+DROP TABLE ss.main.slogs2
+
 statement ok
 DROP TABLE ss.main.slogs
 
