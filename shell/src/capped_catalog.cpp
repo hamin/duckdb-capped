@@ -5,6 +5,7 @@
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
@@ -14,8 +15,7 @@ namespace duckdb {
 CappedCatalog::CappedCatalog(AttachedDatabase &db, CappedStorageInfo storage, bool read_only)
     : Catalog(db), storage(std::move(storage)), read_only(read_only) {
 	local_fs = make_uniq<LocalFileSystem>();
-	CreateSchemaInfo schema_info;
-	schema_info.schema = "main";
+	CreateSchemaInfo schema_info; // 2.0: CreateInfo defaults the schema slot to "main"
 	main_schema = make_uniq<CappedSchema>(*this, schema_info, this->storage);
 }
 
@@ -173,10 +173,12 @@ string CappedCatalog::GetDBPath() {
 	return storage.Root();
 }
 
-CatalogEntryLookup CappedCatalog::TryLookupEntryInternal(CatalogTransaction transaction, const string &schema,
+CatalogEntryLookup CappedCatalog::TryLookupEntryInternal(CatalogTransaction transaction,
                                                          const EntryLookupInfo &lookup_info) {
 	CatalogEntryLookup result;
-	if (!StringUtil::CIEquals(schema, "main")) {
+	// 2.0 carries the schema in lookup_info (empty = unqualified -> resolve to main)
+	auto &schema = lookup_info.GetSchema();
+	if (!schema.empty() && !StringUtil::CIEquals(schema.GetIdentifierName(), "main")) {
 		return result; // unknown schema: plain not-found
 	}
 	result.schema = main_schema.get();

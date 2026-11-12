@@ -97,7 +97,7 @@ public:
 	bool GetMaintenanceFailure(const string &table, idx_t &failures, string &last_error) const;
 
 protected:
-	CatalogEntryLookup TryLookupEntryInternal(CatalogTransaction transaction, const string &schema,
+	CatalogEntryLookup TryLookupEntryInternal(CatalogTransaction transaction,
 	                                          const EntryLookupInfo &lookup_info) override;
 
 private:

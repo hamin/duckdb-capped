@@ -127,7 +127,7 @@ struct CappedAddSegmentGlobalState : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> AddSegmentBind(ClientContext &context, TableFunctionBindInput &input,
-                                        vector<LogicalType> &return_types, vector<string> &names) {
+                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
 	if (input.inputs.size() != 3) {
 		throw BinderException("capped_add_segment(catalog, table, path) takes three VARCHAR arguments");
 	}
@@ -153,7 +153,7 @@ int64_t NowMicros() {
 //! Resolve catalog + table dir (case-insensitively, like catalog lookups),
 //! throwing binder-style errors for the given table function name.
 CappedCatalog &ResolveCappedCatalog(ClientContext &context, const string &catalog_name, const string &fn_name) {
-	auto &cat = Catalog::GetCatalog(context, catalog_name);
+	auto &cat = Catalog::GetCatalog(context, Identifier(catalog_name));
 	if (cat.GetCatalogType() != "capped") {
 		throw CatalogException("%s: '%s' is not a capped catalog", fn_name, catalog_name);
 	}
@@ -172,7 +172,7 @@ string ResolveCappedTable(CappedCatalog &capped_catalog, const string &table, co
 void AddSegmentFunc(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &gstate = data.global_state->Cast<CappedAddSegmentGlobalState>();
 	if (gstate.Finished()) {
-		output.SetCardinality(0);
+		output.SetCardinalityUnsafe(0);
 		return;
 	}
 	gstate.emitted++;
@@ -260,7 +260,7 @@ void AddSegmentFunc(ClientContext &context, TableFunctionInput &data, DataChunk 
 	// caps apply to bulk-ingested data too
 	CappedWrite::Enforce(capped_catalog, table_dir);
 
-	output.SetCardinality(1);
+	output.SetCardinalityUnsafe(1);
 	output.SetValue(0, 0, Value(StringUtil::Format("segment %lld: %lld rows, %lld bytes -> %s", seg_id, rows,
 	                                               bytes, bdata.rel_path)));
 }
@@ -295,7 +295,7 @@ struct CappedStatusGlobalState : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> StatusBind(ClientContext &context, TableFunctionBindInput &input,
-                                    vector<LogicalType> &return_types, vector<string> &names) {
+                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
 	if (input.inputs.size() != 2) {
 		throw BinderException("capped_status(catalog, table) takes two VARCHAR arguments");
 	}
@@ -389,7 +389,7 @@ void StatusFunc(ClientContext &context, TableFunctionInput &data, DataChunk &out
 		output.SetValue(15, r, Value::BIGINT(row.index_bytes));
 		output.SetValue(16, r, Value::BIGINT(seg.fragments));
 	}
-	output.SetCardinality(count);
+	output.SetCardinalityUnsafe(count);
 }
 
 void RegisterStatusFunction(ExtensionLoader &loader) {
@@ -413,7 +413,7 @@ struct CappedSealGlobalState : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> SealBind(ClientContext &context, TableFunctionBindInput &input,
-                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                  vector<LogicalType> &return_types, vector<Identifier> &names) {
 	if (input.inputs.size() != 2) {
 		throw BinderException("capped_seal(catalog, table) takes two VARCHAR arguments");
 	}
@@ -432,7 +432,7 @@ unique_ptr<GlobalTableFunctionState> SealInitGlobal(ClientContext &context, Tabl
 void SealFunc(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &gstate = data.global_state->Cast<CappedSealGlobalState>();
 	if (gstate.Finished()) {
-		output.SetCardinality(0);
+		output.SetCardinalityUnsafe(0);
 		return;
 	}
 	gstate.emitted++;
@@ -441,7 +441,7 @@ void SealFunc(ClientContext &context, TableFunctionInput &data, DataChunk &outpu
 	auto table_dir = ResolveCappedTable(capped_catalog, bdata.table, "capped_seal");
 
 	auto sealed = CappedWrite::ForceSeal(capped_catalog, table_dir);
-	output.SetCardinality(1);
+	output.SetCardinalityUnsafe(1);
 	output.SetValue(0, 0,
 	                Value(sealed ? StringUtil::Format("table '%s': open segment sealed", bdata.table)
 	                             : StringUtil::Format("table '%s': no open segment", bdata.table)));
@@ -475,7 +475,7 @@ struct CappedEnforceGlobalState : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> EnforceBind(ClientContext &context, TableFunctionBindInput &input,
-                                     vector<LogicalType> &return_types, vector<string> &names) {
+                                     vector<LogicalType> &return_types, vector<Identifier> &names) {
 	if (input.inputs.size() < 1 || input.inputs.size() > 2) {
 		throw BinderException("capped_enforce(catalog [, table]) takes one or two VARCHAR arguments");
 	}
@@ -520,7 +520,7 @@ void EnforceFunc(ClientContext &context, TableFunctionInput &data, DataChunk &ou
 		output.SetValue(1, r, Value::BIGINT(row.dropped));
 		output.SetValue(2, r, Value::BOOLEAN(row.sealed));
 	}
-	output.SetCardinality(count);
+	output.SetCardinalityUnsafe(count);
 }
 
 void RegisterEnforceFunction(ExtensionLoader &loader) {
@@ -575,7 +575,7 @@ struct CappedTablesGlobalState : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> TablesBind(ClientContext &context, TableFunctionBindInput &input,
-                                    vector<LogicalType> &return_types, vector<string> &names) {
+                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
 	if (input.inputs.size() != 1) {
 		throw BinderException("capped_tables(catalog) takes one VARCHAR argument");
 	}
@@ -707,7 +707,7 @@ void TablesFunc(ClientContext &context, TableFunctionInput &data, DataChunk &out
 		output.SetValue(19, r, Value::BIGINT(row.bytes_written));
 		output.SetValue(20, r, Value::BIGINT(row.pending_delete_files));
 	}
-	output.SetCardinality(count);
+	output.SetCardinalityUnsafe(count);
 }
 
 void RegisterTablesFunction(ExtensionLoader &loader) {
@@ -744,7 +744,7 @@ struct CappedIndexBuildGlobalState : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> IndexBuildBind(ClientContext &context, TableFunctionBindInput &input,
-                                        vector<LogicalType> &return_types, vector<string> &names) {
+                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
 	if (input.inputs.size() != 2) {
 		throw BinderException("capped_index(catalog, table) takes two VARCHAR arguments");
 	}
@@ -818,13 +818,21 @@ void IndexBuildFunc(ClientContext &context, TableFunctionInput &data, DataChunk 
 		output.SetValue(5, r, Value::BIGINT(row.index_bytes));
 		output.SetValue(6, r, gstate.build_error.empty() ? Value(LogicalType::VARCHAR) : Value(gstate.build_error));
 	}
-	output.SetCardinality(count);
+	output.SetCardinalityUnsafe(count);
 }
 
 void RegisterIndexBuildFunction(ExtensionLoader &loader) {
-	TableFunction index_fn("capped_index", {LogicalType::VARCHAR, LogicalType::VARCHAR}, IndexBuildFunc,
-	                       IndexBuildBind, IndexBuildInitGlobal);
-	index_fn.named_parameters["rebuild"] = LogicalType::BOOLEAN;
+	// 2.0: named parameters live in the signature, not a named_parameters map.
+	// rebuild is keyword-only and must carry the default the bind code used for
+	// an absent parameter — a keyword-only without a default is REQUIRED to the
+	// binder (FunctionSignature::GetRequiredParameterCount).
+	TableFunction index_fn(
+	    "capped_index",
+	    FunctionSignature()
+	        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+	        .AddPositionalOnly("table", LogicalType::VARCHAR)
+	        .AddKeywordOnly("rebuild", LogicalType::BOOLEAN, Value::BOOLEAN(false)),
+	    IndexBuildFunc, IndexBuildBind, IndexBuildInitGlobal);
 	loader.RegisterFunction(index_fn);
 }
 
@@ -864,7 +872,7 @@ int64_t ReadSearchK(const TableFunctionBindInput &input, idx_t positional_index)
 }
 
 //! segment_id, row_id, score, then the searchable text columns of the table
-void DeclareSearchColumns(vector<LogicalType> &return_types, vector<string> &names, const vector<string> &payload) {
+void DeclareSearchColumns(vector<LogicalType> &return_types, vector<Identifier> &names, const vector<string> &payload) {
 	names.emplace_back("segment_id");
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("row_id");
@@ -872,7 +880,7 @@ void DeclareSearchColumns(vector<LogicalType> &return_types, vector<string> &nam
 	names.emplace_back("score");
 	return_types.emplace_back(LogicalType::DOUBLE);
 	for (auto &column : payload) {
-		names.push_back(column);
+		names.push_back(Identifier(column));
 		return_types.emplace_back(LogicalType::VARCHAR);
 	}
 }
@@ -890,11 +898,11 @@ void EmitSearchHits(TableFunctionInput &data, DataChunk &output) {
 			output.SetValue(3 + c, r, hit.values[c]);
 		}
 	}
-	output.SetCardinality(count);
+	output.SetCardinalityUnsafe(count);
 }
 
 unique_ptr<FunctionData> FtsBind(ClientContext &context, TableFunctionBindInput &input,
-                                 vector<LogicalType> &return_types, vector<string> &names) {
+                                 vector<LogicalType> &return_types, vector<Identifier> &names) {
 	if (input.inputs.size() < 3 || input.inputs.size() > 4) {
 		throw BinderException("capped_fts(catalog, table, query [, k]) takes three or four arguments");
 	}
@@ -933,7 +941,7 @@ void FtsFunc(ClientContext &context, TableFunctionInput &data, DataChunk &output
 }
 
 unique_ptr<FunctionData> VectorSearchBind(ClientContext &context, TableFunctionBindInput &input,
-                                          vector<LogicalType> &return_types, vector<string> &names) {
+                                          vector<LogicalType> &return_types, vector<Identifier> &names) {
 	if (input.inputs.size() < 3 || input.inputs.size() > 4) {
 		throw BinderException("capped_vector_search(catalog, table, vector [, k]) takes three or four arguments");
 	}
@@ -985,37 +993,33 @@ void VectorSearchFunc(ClientContext &context, TableFunctionInput &data, DataChun
 }
 
 void RegisterSearchFunctions(ExtensionLoader &loader) {
-	auto add_named = [](TableFunction &fn) {
-		fn.named_parameters["k"] = LogicalType::BIGINT;
-	};
-	TableFunction fts("capped_fts", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, FtsFunc,
-	                  FtsBind, FtsInitGlobal);
-	add_named(fts);
-	TableFunction fts_k("capped_fts",
-	                   {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT},
-	                   FtsFunc, FtsBind, FtsInitGlobal);
-	add_named(fts_k);
-	TableFunctionSet fts_set("capped_fts");
-	fts_set.AddFunction(fts);
-	fts_set.AddFunction(fts_k);
-	loader.RegisterFunction(fts_set);
+	// 2.0: named parameters live in the signature. A keyword-only parameter
+	// without a default is REQUIRED to the binder (see
+	// FunctionSignature::GetRequiredParameterCount), so every optional
+	// parameter carries the default the bind code used for an absent one.
+	// k was positional (4-arg overload) AND nameable in 1.x, so it stays a
+	// STANDARD parameter: positional or by name, with default 10.
+	TableFunction fts("capped_fts",
+	                  FunctionSignature()
+	                      .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+	                      .AddPositionalOnly("table", LogicalType::VARCHAR)
+	                      .AddPositionalOnly("query", LogicalType::VARCHAR)
+	                      .AddParameter("k", LogicalType::BIGINT, Value::BIGINT(10)),
+	                  FtsFunc, FtsBind, FtsInitGlobal);
+	loader.RegisterFunction(fts);
 
 	// the vector argument is ANY on purpose: [1,2,3] binds as LIST, [1,2,3]::FLOAT[3]
-	// as ARRAY, and both are legitimate ways to write a query vector
+	// as ARRAY, and both are legitimate ways to write a query vector.
+	// vector_column was name-only in 1.x, so it stays keyword-only here.
 	TableFunction vec("capped_vector_search",
-	                  {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY}, VectorSearchFunc,
-	                  VectorSearchBind, VectorSearchInitGlobal);
-	vec.named_parameters["k"] = LogicalType::BIGINT;
-	vec.named_parameters["vector_column"] = LogicalType::VARCHAR;
-	TableFunction vec_k("capped_vector_search",
-	                    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY, LogicalType::BIGINT},
-	                    VectorSearchFunc, VectorSearchBind, VectorSearchInitGlobal);
-	vec_k.named_parameters["k"] = LogicalType::BIGINT;
-	vec_k.named_parameters["vector_column"] = LogicalType::VARCHAR;
-	TableFunctionSet vec_set("capped_vector_search");
-	vec_set.AddFunction(vec);
-	vec_set.AddFunction(vec_k);
-	loader.RegisterFunction(vec_set);
+	                  FunctionSignature()
+	                      .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+	                      .AddPositionalOnly("table", LogicalType::VARCHAR)
+	                      .AddPositionalOnly("vector", LogicalType::ANY)
+	                      .AddParameter("k", LogicalType::BIGINT, Value::BIGINT(10))
+	                      .AddKeywordOnly("vector_column", LogicalType::VARCHAR, Value("")),
+	                  VectorSearchFunc, VectorSearchBind, VectorSearchInitGlobal);
+	loader.RegisterFunction(vec);
 }
 
 //! Reject unparseable grace values where the user is looking: PhysicalSet

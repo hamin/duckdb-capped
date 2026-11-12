@@ -45,15 +45,15 @@ CappedTransaction &CappedTransaction::Get(ClientContext &context, Catalog &catal
 }
 
 CappedBuffer &CappedTransaction::GetBuffer(ClientContext &context, CappedTableEntry &entry) {
-	auto key = StringUtil::Lower(entry.name);
+	auto key = StringUtil::Lower(entry.name.GetIdentifierName());
 	auto it = buffers.find(key);
 	if (it != buffers.end()) {
 		return *it->second;
 	}
 	auto buffer = make_uniq<CappedBuffer>();
-	buffer->table = entry.name;
+	buffer->table = entry.name.GetIdentifierName();
 	for (auto &col : entry.GetColumns().Physical()) {
-		buffer->column_names.push_back(col.Name());
+		buffer->column_names.push_back(col.Name().GetIdentifierName());
 		buffer->column_types.push_back(col.Type());
 	}
 	buffer->rows = 0;
@@ -73,7 +73,8 @@ CappedBuffer &CappedTransaction::GetBuffer(ClientContext &context, CappedTableEn
 	if (create->HasError()) {
 		throw IOException("capped: creating insert buffer failed: %s", create->GetError());
 	}
-	buffer->appender = make_uniq<Appender>(*work_con, "temp", "main", buffer->BufferTableName());
+	buffer->appender =
+	    make_uniq<Appender>(*work_con, "temp", "main", Identifier(buffer->BufferTableName()));
 
 	auto *result = buffer.get();
 	buffers[key] = std::move(buffer);

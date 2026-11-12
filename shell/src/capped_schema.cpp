@@ -111,7 +111,9 @@ string CappedSchema::PolicySpecFromOptions(CreateTableInfo &base) {
 			throw ParserException("capped: option '%s' must be a constant value", entry.first);
 		}
 		auto &constant = expr.Cast<ConstantExpression>();
-		auto value = constant.value.ToString();
+		// 2.0: ConstantExpression holds a Literal; go via Value for the same
+		// string form the old constant.value.ToString() produced
+		auto value = constant.GetLiteral().ToValue().ToString();
 		// no time_col (or '' / '__ingest__') means "age by arrival": capped-core
 		// turns that into TimeSource::IngestTime and the table gains the hidden
 		// CAPPED_INGEST_TS_COLUMN, which the flush path stamps with now()
@@ -128,7 +130,8 @@ string CappedSchema::PolicySpecFromOptions(CreateTableInfo &base) {
 optional_ptr<CatalogEntry> CappedSchema::CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) {
 	auto &base = info.Base();
 	if (catalog.Cast<CappedCatalog>().ReadOnly()) {
-		throw IOException("capped: cannot create table '%s': the store is attached READ_ONLY", base.table);
+		throw IOException("capped: cannot create table '%s': the store is attached READ_ONLY",
+		                  base.GetTableName().GetIdentifierName());
 	}
 	if (base.query) {
 		throw NotImplementedException("capped: CREATE TABLE AS SELECT into a capped table is not supported yet");
@@ -145,12 +148,13 @@ optional_ptr<CatalogEntry> CappedSchema::CreateTable(CatalogTransaction transact
 	// serialize with the write path + background enforcement (a concurrent
 	// enforce of the same table must not interleave with this manifest write)
 	auto lock = catalog.Cast<CappedCatalog>().LockWrites();
-	if (storage.ManifestExists(fs, base.table)) {
+	if (storage.ManifestExists(fs, base.GetTableName().GetIdentifierName())) {
 		if (base.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-			return LoadEntry(base.table);
+			return LoadEntry(base.GetTableName().GetIdentifierName());
 		}
 		if (base.on_conflict != OnCreateConflict::REPLACE_ON_CONFLICT) {
-			throw CatalogException("Table with name \"%s\" already exists!", base.table);
+			throw CatalogException("Table with name \"%s\" already exists!",
+			                       base.GetTableName().GetIdentifierName());
 		}
 	}
 
@@ -160,7 +164,7 @@ optional_ptr<CatalogEntry> CappedSchema::CreateTable(CatalogTransaction transact
 		if (i > 0) {
 			columns_json += ",";
 		}
-		columns_json += "{\"name\":\"" + CappedEscapeJson(col.Name()) + "\",\"type\":\"" +
+		columns_json += "{\"name\":\"" + CappedEscapeJson(col.Name().GetIdentifierName()) + "\",\"type\":\"" +
 		                CappedEscapeJson(col.Type().ToString()) + "\"}";
 	}
 	columns_json += "]";
@@ -168,12 +172,13 @@ optional_ptr<CatalogEntry> CappedSchema::CreateTable(CatalogTransaction transact
 	auto policy_json = PolicySpecFromOptions(base);
 	auto manifest = CappedCall(
 	    [&](char **out, char **err) {
-		    return capped_new_manifest(base.table.c_str(), columns_json.c_str(), policy_json.c_str(), out, err);
+		    return capped_new_manifest(base.GetTableName().GetIdentifierName().c_str(), columns_json.c_str(),
+		                               policy_json.c_str(), out, err);
 	    },
-	    "CREATE TABLE " + base.table);
-	storage.WriteManifest(fs, base.table, manifest);
-	entries.erase(StringUtil::Lower(base.table));
-	return LoadEntry(base.table);
+	    "CREATE TABLE " + base.GetTableName().GetIdentifierName());
+	storage.WriteManifest(fs, base.GetTableName().GetIdentifierName(), manifest);
+	entries.erase(StringUtil::Lower(base.GetTableName().GetIdentifierName()));
+	return LoadEntry(base.GetTableName().GetIdentifierName());
 }
 
 void CappedSchema::DropEntry(ClientContext &context, DropInfo &info) {
@@ -189,7 +194,7 @@ void CappedSchema::DropEntry(ClientContext &context, DropInfo &info) {
 	auto &fs = FS();
 	string dir;
 	for (auto &candidate : storage.ListTables(fs)) {
-		if (StringUtil::CIEquals(candidate, info.name)) {
+		if (StringUtil::CIEquals(candidate, info.GetQualifiedName().Name().GetIdentifierName())) {
 			dir = candidate;
 			break;
 		}
@@ -198,7 +203,8 @@ void CappedSchema::DropEntry(ClientContext &context, DropInfo &info) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return;
 		}
-		throw CatalogException("capped: table '%s' does not exist", info.name);
+		throw CatalogException("capped: table '%s' does not exist",
+		                       info.GetQualifiedName().Name().GetIdentifierName());
 	}
 	// DROP must not interleave with enforcement: a tick that read the
 	// manifest before removal would otherwise recreate the directory

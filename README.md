@@ -43,7 +43,7 @@ rationale and prior art: [`docs/capped-tables.md`](../docs/capped-tables.md).
 | Path | What |
 |---|---|
 | `crates/capped-core` | Pure Rust: policy model, segment manifest, seal/eviction planning, C ABI (`src/capi.rs`). No DuckDB dependency. `cargo test`. |
-| `shell/` | DuckDB extension (extension-template based, pinned to DuckDB v1.5.5): `ATTACH (TYPE capped)`, catalog/schema/tables/transactions. `GEN=ninja make release`, then `scripts/smoke.sh`. |
+| `shell/` | DuckDB extension (extension-template based, pinned to DuckDB v2.0.0): `ATTACH (TYPE capped)`, catalog/schema/tables/transactions. `GEN=ninja make release`, then `scripts/smoke.sh`. |
 | `examples/telemetry` | End-to-end demo: OTLP files → capped store → retention → analytics (`demo.sh`). |
 | `docs/` (repo root) | Design rationale and prior-art survey. |
 
@@ -54,6 +54,23 @@ cargo test                                  # Rust core
 cd shell && GEN=ninja make release          # DuckDB + extension
 shell/scripts/smoke.sh                      # end-to-end against local duckdb CLI
 ```
+
+Builds and tests need no extra environment variables:
+
+- The Makefile defaults `OVERRIDE_GIT_DESCRIBE` to the pinned DuckDB tag
+  (`v2.0.0`), so the extension is stamped as a release build even though the
+  `shell/duckdb` submodule is a shallow clone; without it, DuckDB 2.0 builds
+  itself as `v2.0.0-dev<hash>` and refuses to load official v2.0.0 extensions
+  (and `capped.duckdb_extension` gets a hash stamp). Override with
+  `OVERRIDE_GIT_DESCRIBE=... make ...` when building off-tag.
+- `make test`, `make test_search` and `make asan` stage the official
+  `fts`/`vss` extension builds (which the search tests `LOAD`) from
+  `extensions.duckdb.org` into `shell/build/remote-extensions/` on first use —
+  the DuckDB 2.0 test harness replaces `HOME` per run, so an install under
+  `~/.duckdb` is invisible to the tests. Files are kept across runs; re-fetch
+  by deleting that directory. First run needs network access.
+- `make test` runs `duckdb/scripts/ci/run_tests.py`, which needs `python3`
+  >= 3.10 on `PATH`.
 
 Local development loads the unsigned extension: `duckdb -unsigned -c "LOAD '…/capped.duckdb_extension'; …"`.
 

@@ -201,7 +201,7 @@ void CappedFillScalars(QueryResult &result, vector<Value> &out, const string &wh
 		throw IOException("capped: internal query for %s returned an unexpected number of rows", what);
 	}
 	out.clear();
-	for (idx_t i = 0; i < result.types.size(); i++) {
+	for (idx_t i = 0; i < result.GetTypes().size(); i++) {
 		out.push_back(chunk->GetValue(i, 0));
 	}
 }
@@ -1318,7 +1318,7 @@ SourceResultType CappedInsert::GetDataInternal(ExecutionContext &context, DataCh
 	auto &sink = sink_state->Cast<CappedInsertSinkState>();
 	auto &src = input.global_state.Cast<CappedInsertSourceState>();
 	if (!src.emitted) {
-		chunk.SetCardinality(1);
+		chunk.SetCardinalityUnsafe(1);
 		chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(sink.count.load())));
 		src.emitted = true;
 		return SourceResultType::HAVE_MORE_OUTPUT;
@@ -1328,7 +1328,7 @@ SourceResultType CappedInsert::GetDataInternal(ExecutionContext &context, DataCh
 
 InsertionOrderPreservingMap<string> CappedInsert::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
-	result["Table"] = entry.name;
+	result["Table"] = entry.name.GetIdentifierName();
 	return result;
 }
 

@@ -30,6 +30,12 @@ public:
 		return {};
 	}
 
+	//! 2.0 made GetColumns() pure virtual; the manifest-built column list is
+	//! the one in the CreateTableInfo we keep alive below.
+	const ColumnList &GetColumns() const override {
+		return create_info->columns;
+	}
+
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
 	                              const EntryLookupInfo &lookup_info) override;

@@ -98,7 +98,8 @@ CappedTableEntry::CappedTableEntry(Catalog &catalog, SchemaCatalogEntry &schema,
 
 unique_ptr<CreateTableInfo> CappedTableEntry::BuildCreateTableInfo(Catalog &catalog, const string &table,
                                                                    const string &manifest_json) {
-	auto info = make_uniq<CreateTableInfo>(catalog.GetName(), "main", table);
+	auto info = make_uniq<CreateTableInfo>(
+	    QualifiedName(catalog.GetName(), Identifier::DefaultSchema(), Identifier(table)));
 
 	CappedString err;
 	int64_t count = 0;
@@ -117,7 +118,7 @@ unique_ptr<CreateTableInfo> CappedTableEntry::BuildCreateTableInfo(Catalog &cata
 			// keeps INSERT arity and SELECT * natural (no value to supply)
 			continue;
 		}
-		info->columns.AddColumn(ColumnDefinition(name.Str(), CappedTypeFromString(type.Str())));
+		info->columns.AddColumn(ColumnDefinition(Identifier(name.Str()), CappedTypeFromString(type.Str())));
 	}
 	return info;
 }
@@ -127,7 +128,7 @@ unique_ptr<CreateTableInfo> CappedTableEntry::BuildCreateTableInfo(Catalog &cata
 namespace {
 
 void CappedEmptyScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	output.SetCardinality(0);
+	output.SetCardinalityUnsafe(0);
 }
 
 //! Source for capped tables with no sealed segments yet. The binder takes
@@ -184,7 +185,9 @@ vector<string> SegmentPaths(const string &segments_json) {
 TableFunction LookupParquetScan(ClientContext &context) {
 	auto &sys = Catalog::GetSystemCatalog(context);
 	auto lookup = [&](const string &fname) {
-		return sys.GetEntry<TableFunctionCatalogEntry>(context, DEFAULT_SCHEMA, fname, OnEntryNotFound::RETURN_NULL);
+		return sys.GetEntry<TableFunctionCatalogEntry>(
+		    context, QualifiedName(sys.GetName(), Identifier::DefaultSchema(), Identifier(fname)),
+		    OnEntryNotFound::RETURN_NULL);
 	};
 	auto entry = lookup("parquet_scan");
 	if (!entry) {
@@ -199,7 +202,9 @@ TableFunction LookupParquetScan(ClientContext &context) {
 	if (overloads.empty()) {
 		throw IOException("capped: parquet_scan has no overloads registered");
 	}
-	return overloads[0];
+	// 2.0 stores overloads as shared_ptr<const TableFunction>; copy so the
+	// caller can own a mutable function (it rewrites name/bind inputs)
+	return *overloads[0];
 }
 
 } // namespace
@@ -214,20 +219,20 @@ TableFunction CappedTableEntry::GetScanFunction(ClientContext &context, unique_p
 	auto txn = Transaction::TryGet(context, capped_catalog.GetAttached());
 	if (txn) {
 		auto &capped_txn = txn->Cast<CappedTransaction>();
-		if (capped_txn.HasBufferFor(name)) {
+		if (capped_txn.HasBufferFor(name.GetIdentifierName())) {
 			throw NotImplementedException(
 			    "capped: reading table '%s' inside the transaction that inserted into it is not supported "
 			    "yet — COMMIT first",
-			    name);
+			    name.GetIdentifierName());
 		}
 	}
 	// read the manifest fresh on every bind: newly sealed segments become
 	// visible to new queries without re-attaching
-	auto manifest = storage.ReadManifest(fs, name);
+	auto manifest = storage.ReadManifest(fs, name.GetIdentifierName());
 
 	CappedString err, segments_json;
 	if (capped_manifest_list_segments(manifest.c_str(), segments_json.Receive(), err.Receive()) != CAPPED_OK) {
-		throw IOException("capped: listing segments of '%s' failed: %s", name, err.Str());
+		throw IOException("capped: listing segments of '%s' failed: %s", name.GetIdentifierName(), err.Str());
 	}
 	auto paths = SegmentPaths(segments_json.Str());
 	if (paths.empty()) {
@@ -249,13 +254,15 @@ TableFunction CappedTableEntry::GetScanFunction(ClientContext &context, unique_p
 
 	auto scan = LookupParquetScan(context);
 	TableFunctionRef ref;
-	named_parameter_map_t named_parameters;
+	named_argument_map_t named_parameters;
 	vector<LogicalType> input_table_types;
-	vector<string> input_table_names;
+	vector<Identifier> input_table_names;
+	// 2.0: bind inputs refer to a BoundTableFunction, not the catalog TableFunction
+	BoundTableFunction bound_scan(scan);
 	TableFunctionBindInput bind_input(inputs, named_parameters, input_table_types, input_table_names, nullptr,
-	                                  nullptr, scan, ref);
+	                                  nullptr, bound_scan, ref);
 	vector<LogicalType> scratch_types;
-	vector<string> scratch_names;
+	vector<Identifier> scratch_names;
 	if (!scan.bind) {
 		throw IOException("capped: unexpected: parquet_scan has no bind function");
 	}
@@ -270,7 +277,7 @@ TableFunction CappedTableEntry::GetScanFunction(ClientContext &context, unique_p
 }
 
 TableFunction CappedTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
-	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, name);
+	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, QualifiedName(name));
 	return GetScanFunction(context, bind_data, lookup_info);
 }
 
