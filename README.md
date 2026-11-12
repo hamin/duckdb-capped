@@ -34,7 +34,8 @@ SELECT * FROM capped_add_segment('tlog', 'events', 'events/9.seg.parquet');
 
 Design in one line: each table is an ordered sequence of immutable sealed
 segment files plus one open segment, so retention is **deleting whole files**
-— O(1), exact byte caps, no delete tombstones, no compaction. Full design
+— O(1), exact byte caps, no delete tombstones, no compaction of sealed
+data. Full design
 rationale and prior art: [`docs/capped-tables.md`](../docs/capped-tables.md).
 
 ## Repo layout
@@ -151,7 +152,8 @@ in Rust here; the shell is a thin C++ registration layer that
     manifest.json            # Rust-owned: schema, policy, segment list
     0.seg.parquet            # sealed segment (root-relative "events/0.seg.parquet" in the manifest)
     0.seg.idx.duckdb         # its search index (only for tables that asked for one)
-    1.seg.parquet            # the open segment: same format, flagged unsealed in the manifest
+    1.frag-000000.parquet    # the open segment: one fragment file per commit…
+    1.frag-000008.parquet    # …merged 8-at-a-time (two tiers) until it seals
 ```
 
 The manifest owns the schema, which is why an ingest-time table's hidden
@@ -159,19 +161,52 @@ The manifest owns the schema, which is why an ingest-time table's hidden
 catalog: `BuildCreateTableInfo` skips it when handing the table to DuckDB.
 Segments are plain Parquet files; scans delegate to the parquet extension
 (statically linked in the built shell; autoloaded by the CLI). `INSERT`
-buffers rows in the transaction and, at commit, merges them into the table's
-single open segment file (write new parquet → swap → update manifest, so a
-crash never leaves a half-published table). The open segment is sealed
-automatically when it grows past the seal limits (~128 MB / 1 M rows / 1 h
-event-time span) or manually via `capped_seal`; the eviction planner then
-drops whole sealed files to honor `ttl` / `max_bytes` / `max_rows`, oldest
-first. `COPY ... TO '<store>/<table>/<id>.seg.parquet' (FORMAT parquet)` +
+buffers rows in the transaction and, at commit, appends them as **one new
+fragment file** (`<id>.frag-<seq>.parquet`) of the table's single open
+segment — no read-and-rewrite of what is already there (write temp → rename →
+swap the manifest, so a crash never leaves a half-published table). As
+fragments pile up, runs of 8 same-tier files are merged, two tiers deep,
+keeping the open segment at a handful of files. Sealing — automatically
+when the segment passes the seal limits (~128 MB / 1 M rows / 1 h event-time
+span, or 32 fragment files) or manually via `capped_seal` — merges all
+fragments into the one `<id>.seg.parquet` (a lone fragment is adopted as-is;
+if the planned name is taken the seal writes `<id>.seg-<micros>.parquet`),
+and the eviction planner then drops whole sealed files to honor `ttl` /
+`max_bytes` / `max_rows`, oldest first. `COPY ... TO '<store>/<table>/<id>.seg.parquet' (FORMAT parquet)` +
 `SELECT capped_add_segment('<catalog>', '<table>', '<table>/<id>.seg.parquet')`
 remains the zero-copy bulk-ingest path (stats read from parquet metadata).
 
-Known v1 limitations: uncommitted rows are only visible to their own
-transaction's commit, and reading a table inside the transaction that inserted
-into it errors (rather than silently missing the buffered rows) — commit first.
+Merged-away fragments and the fragments a seal consumed are not deleted
+outright: they wait 5 minutes in the manifest's `pending_deletes` (so a query
+that already opened them can finish), then a sweep pass deletes them. Crash
+leftovers — an orphaned fragment, temp, or seal output that no manifest
+references — are collected at `ATTACH`, and the collector only ever deletes
+top-level files named exactly like capped's own leftovers:
+`<id>.frag-<digits>.parquet`, `.flush-<digits>.tmp.parquet`,
+`<id>.seg-<digits>.parquet`, and the open segment's planned
+`<id>.seg.parquet`. Don't give your own files those names inside a table
+directory; anything else — user parquet, other extensions, odd shapes — is
+left alone.
+
+Known v1 limitations:
+
+- Uncommitted rows are only visible to their own transaction's commit, and
+  reading a table inside the transaction that inserted into it errors (rather
+  than silently missing the buffered rows) — commit first.
+- An open segment's bytes overstate what its sealed file will weigh (many
+  small fragments compress worse than one merged file), so `max_bytes`
+  eviction is slightly conservative while a segment is open.
+- Files waiting in `pending_deletes` don't count against `max_bytes`; the
+  overshoot is bounded by roughly one open segment's worth per 5 minutes.
+- A query that holds a file list open for more than 5 minutes can fail with
+  file-not-found when a merge or seal sweeps those files mid-query.
+- Seal limits are fixed (~128 MB / 1 M rows / 1 h span, plus the 32-fragment
+  rule); per-table seal limits are not wired into the write path yet.
+- One writer process per store: the write lock is in-process only, and there
+  is no cross-process lock. Other processes should attach `READ_ONLY`.
+- `maintenance_failures` and `last_maintenance_error` (`capped_tables`) are
+  kept in memory and reset on restart.
+
 Retention is applied at every write, seal, and `capped_add_segment`, again at
 `ATTACH`, by a background thread every `enforce_interval` (default 60s; `0`
 disables it), and on demand via `capped_enforce`.
@@ -180,18 +215,19 @@ disables it), and on demand via `capped_enforce`.
 
 | Call | Meaning |
 |---|---|
-| `ATTACH 'dir' AS t (TYPE capped [, enforce_interval '60s'])` | open a store; applies retention, then enforces on a background thread (0 disables) |
+| `ATTACH 'dir' AS t (TYPE capped [, enforce_interval '60s'] [, READ_ONLY])` | open a store; applies retention, then enforces on a background thread (0 disables). A `READ_ONLY` attach writes nothing at all — no retention pass, background thread, seal, sweep, orphan GC, or index build — and refuses INSERTs, DDL and `capped_add_segment`; peers of a writer should use it |
 | `CREATE TABLE t.main.x(...) WITH (time_col, ttl, max_bytes, max_rows, grace, evict_order, on_violation[, search_columns, vector_columns, vector_metric])` | create a capped table (≥ 1 cap required; no `time_col` ⇒ age by ingest time via the hidden `_ingest_ts`; options validated by capped-core) |
-| `INSERT INTO t.main.x ...` | append (VALUES / SELECT); buffered, merged into the open segment on commit |
+| `INSERT INTO t.main.x ...` | append (VALUES / SELECT); buffered, appended to the open segment as one fragment file on commit |
 | `SELECT ... FROM t.main.x` | scan via parquet pushdown; sealed + open segments |
 | `SELECT * FROM capped_fts('t','x','query'[, k := 10])` | BM25 top-k over the searchable columns of the sealed segments |
 | `SELECT * FROM capped_vector_search('t','x',vec[, k := 10][, vector_column := 'c'])` | nearest neighbours over an indexed vector column of the sealed segments |
 | `SELECT * FROM capped_index('t','x'[, rebuild := true])` | build (or rebuild) the missing search indexes; one row per segment with `build_error` |
-| `SELECT * FROM capped_status('t','x')` | per-segment rows/bytes/event-time + the table's caps + `indexed`/`index_bytes` |
-| `SELECT * FROM capped_tables('t')` | one row per table: segments, sealed/open, rows, bytes, time range, caps, indexed count |
+| `SELECT * FROM capped_status('t','x')` | per-segment rows/bytes/event-time + the table's caps + `indexed`/`index_bytes` + `fragments` (the open segment's file count; 0 for sealed segments) |
+| `SELECT * FROM capped_tables('t')` | one row per table: segments, sealed/open, rows, bytes, time range, caps, indexed count + `fragments`, `bytes_written` (cumulative Parquet bytes capped wrote), `pending_delete_files`, `maintenance_failures`/`last_maintenance_error` |
 | `SELECT * FROM capped_seal('t','x')` | rotate: seal the open segment, start a new one |
 | `SELECT * FROM capped_enforce('t')` / `capped_enforce('t','x')` | apply retention now (idle stores, bulk loads); returns dropped/sealed per table |
 | `SELECT * FROM capped_add_segment('t','x','x/9.seg.parquet')` | adopt a parquet file as a sealed segment (bulk ingest; the file must hold the table's columns — `_ingest_ts` optional) |
+| `SET capped_pending_delete_grace = '5min'` | test knob: how long merged/sealed-away files wait in `pending_deletes` before the sweep deletes them, and how fresh an orphan must be to survive the `ATTACH` GC (duration; default 5 min; an unparseable value is rejected at `SET`). Only deletes queued after the `SET` move — stored `not_before` values stay honoured as written |
 | `SELECT capped_version()` | capped-core version |
 
 ### What decides a segment's age

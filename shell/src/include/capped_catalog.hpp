@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 
 namespace duckdb {
 
@@ -18,7 +19,7 @@ namespace duckdb {
 //! manifest.json, read fresh on every lookup (like other external catalogs).
 class CappedCatalog : public Catalog {
 public:
-	CappedCatalog(AttachedDatabase &db, CappedStorageInfo storage);
+	CappedCatalog(AttachedDatabase &db, CappedStorageInfo storage, bool read_only);
 	~CappedCatalog() override;
 
 	void Initialize(bool load_builtin) override;
@@ -80,6 +81,21 @@ public:
 		search_degraded = degraded;
 	}
 
+	//! True when this store was ATTACHed READ_ONLY. The contract is that
+	//! capped writes nothing to the store: no attach-time maintenance or TTL
+	//! pass, no background enforcement thread, and every write path (flush,
+	//! seal, enforce, sweep, GC, DDL, add_segment, index build) refuses or no-ops.
+	bool ReadOnly() const {
+		return read_only;
+	}
+
+	//! Post-commit maintenance (fragment compaction, seal) is best-effort: a
+	//! failure there must not fail the already-durable commit, but it must not
+	//! be silent either — count failures per table and keep the last message
+	//! for capped_tables. In-memory only; a restart resets the counters.
+	void RecordMaintenanceFailure(const string &table, const string &error);
+	bool GetMaintenanceFailure(const string &table, idx_t &failures, string &last_error) const;
+
 protected:
 	CatalogEntryLookup TryLookupEntryInternal(CatalogTransaction transaction, const string &schema,
 	                                          const EntryLookupInfo &lookup_info) override;
@@ -90,10 +106,20 @@ private:
 	void EnforceLoop();
 
 	CappedStorageInfo storage;
+	const bool read_only;
 	unique_ptr<CappedSchema> main_schema;
 	unique_ptr<LocalFileSystem> local_fs;
 	std::mutex write_mutex;
 	std::atomic<bool> search_degraded {false};
+
+	//! Per-table post-commit maintenance accounting (RecordMaintenanceFailure);
+	//! written under the catalog write lock, read by capped_tables without it.
+	struct MaintenanceStats {
+		idx_t failures = 0;
+		string last_error;
+	};
+	mutable std::mutex maintenance_mutex;
+	std::unordered_map<string, MaintenanceStats> maintenance_failures;
 
 	std::thread enforce_thread;
 	std::mutex stop_mutex;

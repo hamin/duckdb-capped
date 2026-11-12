@@ -51,6 +51,13 @@ struct CappedSegmentInfo {
 	int64_t min_ts = 0;
 	int64_t max_ts = 0;
 	bool sealed = false;
+	//! Fragment count of the open segment (0 for sealed segments; a legacy
+	//! open segment has 0 fragments but rows > 0 — plan §3.2/§3.8).
+	int64_t fragments = 0;
+	//! The files a scan reads, in order (capped_manifest_list_segments
+	//! "files"): [path] for sealed / legacy open, the fragment paths for a
+	//! fragment-based open segment, empty for a fresh one.
+	vector<string> files;
 	//! Search index of this segment, when one was built (root-relative). A
 	//! sealed segment without one is not searchable: either the table asked for
 	//! no indexes, or the build failed (see capped_index).
@@ -76,6 +83,14 @@ struct CappedPolicySummary {
 	int64_t max_rows = 0;
 };
 CappedPolicySummary CappedReadPolicySummary(const string &manifest_json);
+
+//! Table-level accounting from capped_manifest_stats: cumulative Parquet bytes
+//! capped wrote for this table, and files queued in pending_deletes (§3.9).
+struct CappedManifestStats {
+	int64_t bytes_written = 0;
+	int64_t pending_delete_files = 0;
+};
+CappedManifestStats CappedReadManifestStats(const string &manifest_json);
 
 //! What one enforcement pass did.
 struct CappedEnforceSummary {
@@ -105,17 +120,32 @@ struct CappedWrite {
 	static void ComputeSegmentStats(Connection &con, const string &abs_path, const string &time_col,
 	                                int64_t &rows, int64_t &bytes, bool &has_ts, int64_t &min_ts, int64_t &max_ts);
 
-	//! Merge one transaction buffer into the table's open segment: write the
-	//! merged parquet, apply eviction, publish, then seal. Hard caps
-	//! (on_violation => block) are checked against the merged state before
-	//! anything is published; on failure nothing lands and the exception
-	//! aborts the commit.
+	//! Commit one transaction buffer as a new fragment file of the table's
+	//! open segment: write the fragment, apply eviction, publish through the
+	//! manifest swap (the single commit point), then run minor compaction and
+	//! the seal check as best-effort maintenance (the commit is already
+	//! durable by then). Hard caps (on_violation => block) are checked against
+	//! the candidate state before anything is published; on failure nothing
+	//! lands and the exception aborts the commit.
 	static void FlushBuffer(ClientContext &context, CappedCatalog &catalog, Connection &con, CappedBuffer &buffer);
 
 	//! Eviction (and open-seal) check after out-of-band manifest changes
 	//! (capped_add_segment) or on demand (capped_enforce / ATTACH). Throws if
 	//! the table is still over a hard cap.
 	static CappedEnforceSummary Enforce(CappedCatalog &catalog, const string &table);
+
+	//! ATTACH maintenance for one table (fragments plan §3.7/§3.8): seal a
+	//! legacy open segment in place, sweep due pending deletes (manifest
+	//! first, then files), then collect orphan crash leftovers. Never run it
+	//! under a READ_ONLY ATTACH. Delete errors are recorded via
+	//! RecordMaintenanceFailure; the caller must not hold the write lock.
+	static void AttachMaintenance(CappedCatalog &catalog, const string &table);
+
+	//! Grammar of the capped_pending_delete_grace setting: a number with a
+	//! unit suffix (us/ms/s/min/h/d) or bare microseconds; "0" = collect now.
+	//! Shared by the SET-time validation (capped_extension.cpp) and the
+	//! reader (capped_write.cpp), so a SET that succeeds always parses.
+	static bool TryParseGraceMicros(const string &text, int64_t &out_micros);
 
 	//! Force-seal the open segment (capped_seal), then enforce. Returns false
 	//! when there was no open segment.

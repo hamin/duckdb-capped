@@ -200,6 +200,8 @@ mod tests {
             search: Default::default(),
             segments,
             next_segment_id: 100,
+            pending_deletes: Vec::new(),
+            write_stats: Default::default(),
         }
     }
 

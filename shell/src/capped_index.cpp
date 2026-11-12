@@ -439,6 +439,9 @@ idx_t CappedIndex::BytesOnDisk(CappedCatalog &catalog, const string &rel_index_p
 }
 
 idx_t CappedIndex::EnsureUnlocked(CappedCatalog &catalog, const string &table, string &error, CappedIndexMode mode) {
+	if (catalog.ReadOnly()) {
+		return 0; // index files are store writes; a READ_ONLY attach builds none
+	}
 	auto &fs = catalog.FS();
 	auto &storage = catalog.Storage();
 	auto manifest = storage.ReadManifest(fs, table);

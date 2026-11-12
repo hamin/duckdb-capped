@@ -1,0 +1,838 @@
+# name: test/sql/capped_fragments_e2e.test
+# description: fragments end-to-end (open-segment fragments plan §5 T9): content
+#              survives compaction and seal, disk files match the manifest, TTL
+#              eviction of a fragmented ingest-time segment, fts across
+#              merged-away fragments, blocked commits leave nothing behind, and
+#              names occupied on disk never wedge a commit
+# group: [sql]
+
+require capped
+
+require parquet
+
+statement ok
+LOAD fts
+
+statement ok
+LOAD vss
+
+# One store, no background thread: every sweep, seal and eviction lands
+# exactly where a statement puts it.
+
+statement ok
+ATTACH '__TEST_DIR__/capped_e2e' AS e2e (TYPE capped, enforce_interval '0')
+
+# ---------------------------------------------------------------------------
+# (a) 50 single-row commits: every row present, the open segment stays
+#     within the 32-fragment cap, and the .parquet files on disk are exactly
+#     what the manifest references — sealed paths + live fragments + the
+#     still-graced pending deletes (all queued under the default 5-minute
+#     grace, so none has been swept). Checked before and after a seal.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE e2e.main.t50(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (1)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (2)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (3)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (4)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (5)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (6)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (7)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (8)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (9)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (10)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (11)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (12)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (13)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (14)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (15)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (16)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (17)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (18)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (19)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (20)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (21)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (22)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (23)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (24)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (25)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (26)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (27)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (28)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (29)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (30)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (31)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (32)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (33)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (34)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (35)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (36)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (37)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (38)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (39)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (40)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (41)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (42)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (43)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (44)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (45)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (46)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (47)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (48)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (49)
+
+statement ok
+INSERT INTO e2e.main.t50 VALUES (50)
+
+query I
+SELECT count(*) FROM e2e.main.t50
+----
+50
+
+query I
+SELECT sum(x) FROM e2e.main.t50
+----
+1275
+
+query I
+SELECT (fragments <= 32)::INTEGER FROM capped_tables('e2e') WHERE table_name = 't50'
+----
+1
+
+query I
+SELECT (max(fragments) <= 32)::INTEGER FROM capped_status('e2e', 't50')
+----
+1
+
+# the .parquet files on disk are exactly the sealed segment paths, the live
+# fragments of the open segment, and the still-graced pending deletes
+query I
+SELECT (((SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/t50/*.parquet')
+          WHERE file NOT LIKE '%/.flush-%')
+         = (SELECT count(*) FROM capped_status('e2e', 't50') WHERE sealed)
+           + (SELECT fragments FROM capped_tables('e2e') WHERE table_name = 't50')
+           + (SELECT pending_delete_files FROM capped_tables('e2e') WHERE table_name = 't50'))
+        )::INTEGER
+----
+1
+
+statement ok
+SELECT * FROM capped_seal('e2e', 't50')
+
+# sealed: one segment file, no fragments left, and every sealed path exists
+query I
+SELECT count(*) FROM e2e.main.t50
+----
+50
+
+query I
+SELECT fragments FROM capped_status('e2e', 't50') WHERE sealed
+----
+0
+
+query I
+SELECT count(*) FROM capped_status('e2e', 't50') s
+WHERE s.sealed AND NOT EXISTS (SELECT 1 FROM glob('__TEST_DIR__/capped_e2e/t50/*') g
+                               WHERE g.file = '__TEST_DIR__/capped_e2e/' || s.path)
+----
+0
+
+query I
+SELECT (((SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/t50/*.parquet')
+          WHERE file NOT LIKE '%/.flush-%')
+         = (SELECT count(*) FROM capped_status('e2e', 't50') WHERE sealed)
+           + (SELECT fragments FROM capped_tables('e2e') WHERE table_name = 't50')
+           + (SELECT pending_delete_files FROM capped_tables('e2e') WHERE table_name = 't50'))
+        )::INTEGER
+----
+1
+
+# ---------------------------------------------------------------------------
+# (b) content identity across compaction (the 8-merge fired during the
+#     inserts) and the seal: the multiset hash is unchanged.
+# (c) the sealed segment stores exactly the rows and the event-time bounds
+#     of the data.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE e2e.main.tc(ts TIMESTAMPTZ, msg VARCHAR, x BIGINT) WITH (time_col='ts', ttl='36500 days', max_bytes='1GB')
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:01+00', 'row-1', 1)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:02+00', 'row-2', 2)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:03+00', 'row-3', 3)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:04+00', 'row-4', 4)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:05+00', 'row-5', 5)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:06+00', 'row-6', 6)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:07+00', 'row-7', 7)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:08+00', 'row-8', 8)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:09+00', 'row-9', 9)
+
+statement ok
+INSERT INTO e2e.main.tc VALUES (TIMESTAMPTZ '2026-11-01 00:00:10+00', 'row-10', 10)
+
+statement ok
+CREATE TEMP TABLE tc_hash AS SELECT sum(hash(ts, msg, x)) AS h FROM e2e.main.tc
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'tc')
+
+query I
+SELECT ((SELECT sum(hash(ts, msg, x)) FROM e2e.main.tc) = (SELECT h FROM tc_hash))::INTEGER
+----
+1
+
+query I
+SELECT (s.rows = (SELECT count(*) FROM e2e.main.tc) AND
+        s.min_ts_us = (SELECT epoch_ns(min(ts))::BIGINT // 1000 FROM e2e.main.tc) AND
+        s.max_ts_us = (SELECT epoch_ns(max(ts))::BIGINT // 1000 FROM e2e.main.tc))::INTEGER
+FROM capped_status('e2e', 'tc') s WHERE s.sealed
+----
+1
+
+# ---------------------------------------------------------------------------
+# (d) ingest-time table (no time column, hidden _ingest_ts): fragments, the
+#     8-merge, a seal (single fragment adopted as-is at its fragment path),
+#     then TTL eviction. The 1-second ttl ages by real time, so a busy wait
+#     stands in for the clock; eviction drops the segment and removes its
+#     file on the spot (the manifest swap is the commit; GC only chases
+#     leftovers).
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE e2e.main.ti(x BIGINT) WITH (ttl='1 second')
+
+statement ok
+INSERT INTO e2e.main.ti VALUES (1)
+
+statement ok
+INSERT INTO e2e.main.ti VALUES (2)
+
+statement ok
+INSERT INTO e2e.main.ti VALUES (3)
+
+statement ok
+INSERT INTO e2e.main.ti VALUES (4)
+
+statement ok
+INSERT INTO e2e.main.ti VALUES (5)
+
+statement ok
+INSERT INTO e2e.main.ti VALUES (6)
+
+statement ok
+INSERT INTO e2e.main.ti VALUES (7)
+
+statement ok
+INSERT INTO e2e.main.ti VALUES (8)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'ti')
+
+# the free seal adopted the merge output (seq 8) as the sealed segment
+query I
+SELECT path FROM capped_status('e2e', 'ti') WHERE sealed
+----
+ti/0.frag-000008.parquet
+
+query I
+SELECT count(*) FROM e2e.main.ti
+----
+8
+
+# age past the 1-second ttl (~2 s of single-threaded work), then evict
+statement ok
+SET threads = 1
+
+query I
+SELECT count(DISTINCT hash(range)) > 0 FROM range(12000000)
+----
+1
+
+query I
+SELECT count(DISTINCT hash(range)) > 0 FROM range(12000000)
+----
+1
+
+statement ok
+RESET threads
+
+statement ok
+SELECT * FROM capped_enforce('e2e', 'ti')
+
+query I
+SELECT count(*) FROM e2e.main.ti
+----
+0
+
+query I
+SELECT segments FROM capped_tables('e2e') WHERE table_name = 'ti'
+----
+0
+
+query I
+SELECT count(*) FROM capped_status('e2e', 'ti')
+----
+0
+
+# the evicted segment's file is gone from disk as well
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/ti/0.frag-000008.parquet')
+----
+0
+
+# ---------------------------------------------------------------------------
+# (e) search across merged-away fragments: the needle row lives in
+#     0.frag-000000, the 8-merge folds that fragment away, the seal folds the
+#     surviving fragments into the sealed segment — and capped_fts still
+#     finds the row; capped_index reports a clean build for the sealed file.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE e2e.main.se(msg VARCHAR) WITH (max_bytes='1GB', search_columns='msg')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('zq7needle-xylophone-quartz')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 2 nothing searchable')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 3 nothing searchable')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 4 nothing searchable')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 5 nothing searchable')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 6 nothing searchable')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 7 nothing searchable')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 8 nothing searchable')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 9 nothing searchable')
+
+statement ok
+INSERT INTO e2e.main.se VALUES ('filler row 10 nothing searchable')
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'se')
+
+query I
+SELECT count(*) FROM capped_fts('e2e', 'se', 'zq7needle-xylophone-quartz')
+----
+1
+
+query I
+SELECT msg FROM capped_fts('e2e', 'se', 'zq7needle-xylophone-quartz')
+----
+zq7needle-xylophone-quartz
+
+query I
+SELECT (bool_and(build_error IS NULL) AND bool_and(indexed))::INTEGER
+FROM capped_index('e2e', 'se') WHERE sealed
+----
+1
+
+# ---------------------------------------------------------------------------
+# (f) on_violation => block: the rejected commit errors and leaves NO
+#     fragment file and NO .flush temp behind — the hard cap throws before
+#     publication, so the seq the rejected commit would have used stays
+#     unbuilt (max_rows is a total cap, so no further commit is accepted).
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE e2e.main.tb(x BIGINT) WITH (max_rows='3', on_violation='block')
+
+statement ok
+INSERT INTO e2e.main.tb VALUES (1)
+
+statement ok
+INSERT INTO e2e.main.tb VALUES (2)
+
+statement ok
+INSERT INTO e2e.main.tb VALUES (3)
+
+query I
+SELECT fragments FROM capped_tables('e2e') WHERE table_name = 'tb'
+----
+3
+
+statement error
+INSERT INTO e2e.main.tb VALUES (4)
+----
+would exceed its hard cap
+
+query I
+SELECT fragments FROM capped_tables('e2e') WHERE table_name = 'tb'
+----
+3
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/tb/*.parquet') WHERE file NOT LIKE '%/.flush-%'
+----
+3
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/tb/.flush-*')
+----
+0
+
+# the rejected commit left nothing at seq 3 either
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/tb/0.frag-000003.parquet')
+----
+0
+
+query I
+SELECT count(*) FROM e2e.main.tb
+----
+3
+
+# ---------------------------------------------------------------------------
+# (g) capped_add_segment owns the name a FUTURE open segment would pick
+#     (segment ids are never reused): segment 9 plans g1/9.seg.parquet,
+#     finds it taken on disk, and takes the reserved
+#     <id>.seg-<micros>.parquet form instead — commits and the seal
+#     succeed, the adopted file stays byte-identical, every row reads.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE e2e.main.g1(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (1)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (2)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (3)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+statement ok
+COPY (SELECT 999::BIGINT AS x) TO '__TEST_DIR__/capped_e2e/g1/9.seg.parquet' (FORMAT parquet)
+
+statement ok
+SELECT * FROM capped_add_segment('e2e', 'g1', 'g1/9.seg.parquet')
+
+statement ok
+CREATE TEMP TABLE g_md5 AS SELECT md5(content) AS m FROM read_blob('__TEST_DIR__/capped_e2e/g1/9.seg.parquet')
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (4)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (5)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (6)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (7)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (8)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+# segment 9 now wants g1/9.seg.parquet — taken by the adopted file, so the
+# fresh open segment planned around it and the seal used the unique form
+statement ok
+INSERT INTO e2e.main.g1 VALUES (9)
+
+statement ok
+INSERT INTO e2e.main.g1 VALUES (10)
+
+statement ok
+SELECT * FROM capped_seal('e2e', 'g1')
+
+query I
+SELECT (path LIKE 'g1/9.seg-%' AND path <> 'g1/9.seg.parquet')::INTEGER
+FROM capped_status('e2e', 'g1') WHERE segment_id = 9
+----
+1
+
+# the adopted segment is still registered — referenced, so GC must keep it
+query I
+SELECT path FROM capped_status('e2e', 'g1') WHERE segment_id = 3
+----
+g1/9.seg.parquet
+
+query I
+SELECT (rows = 1 AND sealed)::INTEGER FROM capped_status('e2e', 'g1') WHERE segment_id = 3
+----
+1
+
+# the user file is byte-identical, and every row (1..10 plus 999) reads
+query I
+SELECT (md5(content) = (SELECT m FROM g_md5))::INTEGER
+FROM read_blob('__TEST_DIR__/capped_e2e/g1/9.seg.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM e2e.main.g1
+----
+11
+
+query I
+SELECT sum(x) FROM e2e.main.g1
+----
+1054
+
+# ---------------------------------------------------------------------------
+# (h) occupied merge output, recovery (needs the T9 skip fix): a DIRECTORY
+#     at the merge output path would block every later commit, because the
+#     manifest consumes a seq only when it lands and the next commit would
+#     retry the same name forever. With the fix the merge reroutes to the
+#     next free seq, records a maintenance failure, and the commits keep
+#     succeeding; nothing is lost or duplicated. GC never collects
+#     directories, so the blocker itself survives a later ATTACH — the merge
+#     simply routes around it.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE e2e.main.th(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO e2e.main.th VALUES (1)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (2)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (3)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (4)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (5)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (6)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (7)
+
+# the first merge fires on the 8th commit and would output seq 8 — plant a
+# directory there (a partitioned COPY, which touches no fragment a scan reads)
+statement ok
+COPY (SELECT 1 AS p, 'x' AS v) TO '__TEST_DIR__/capped_e2e/th/0.frag-000008.parquet' (FORMAT parquet, PARTITION_BY (p))
+
+statement ok
+INSERT INTO e2e.main.th VALUES (8)
+
+query IT
+SELECT maintenance_failures, COALESCE(last_maintenance_error, '<none>') FROM capped_tables('e2e') WHERE table_name = 'th'
+----
+1	fragment compaction: path th/0.frag-000008.parquet is occupied on disk; wrote the merge output under seq 9
+
+# commits keep succeeding past the blocked name
+statement ok
+INSERT INTO e2e.main.th VALUES (9)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (10)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (11)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (12)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (13)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (14)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (15)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (16)
+
+# the merge caught up by rerouting: 16 rows exactly once, and the live file
+# count stays bounded (two tier-1 merge outputs)
+query I
+SELECT count(*) FROM e2e.main.th
+----
+16
+
+query I
+SELECT sum(x) FROM e2e.main.th
+----
+136
+
+query I
+SELECT fragments FROM capped_tables('e2e') WHERE table_name = 'th'
+----
+2
+
+query I
+SELECT (fragments <= 32)::INTEGER FROM capped_tables('e2e') WHERE table_name = 'th'
+----
+1
+
+query I
+SELECT pending_delete_files FROM capped_tables('e2e') WHERE table_name = 'th'
+----
+16
+
+statement ok
+INSERT INTO e2e.main.th VALUES (17)
+
+statement ok
+INSERT INTO e2e.main.th VALUES (18)
+
+query I
+SELECT count(*) FROM e2e.main.th
+----
+18
+
+query I
+SELECT sum(x) FROM e2e.main.th
+----
+171
+
+# the blocker is still on disk (GC only ever removes regular files; glob()
+# itself only sees files, so the recursive ** reaches into the planted dir)
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/th/0.frag-000008.parquet/**')
+----
+1
+
+# ---------------------------------------------------------------------------
+# (i) stray FILE at the next fragment path: plant a small parquet named
+#     <open_id>.frag-<next seq>.parquet, the commit succeeds (it routes to
+#     the next free seq and burns the planted one), the stray file is
+#     untouched by the commit, and it is collected by GC on a later ATTACH
+#     once capped_pending_delete_grace = '0s' drops the age floor. That same
+#     sweep keeps every manifest-referenced file: the adopted user file
+#     survives byte-identical, the blocker directory survives (directories
+#     are never GC candidates), and the pending deletes queued earlier under
+#     the default grace are not yet due, so they survive too.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE e2e.main.i1(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO e2e.main.i1 VALUES (1)
+
+statement ok
+COPY (SELECT 42::BIGINT AS x) TO '__TEST_DIR__/capped_e2e/i1/0.frag-000001.parquet' (FORMAT parquet)
+
+statement ok
+CREATE TEMP TABLE stray_md5 AS SELECT md5(content) AS m FROM read_blob('__TEST_DIR__/capped_e2e/i1/0.frag-000001.parquet')
+
+statement ok
+INSERT INTO e2e.main.i1 VALUES (2)
+
+# the commit succeeded, its fragment landed at seq 2 (seq 1 was skipped),
+# and the stray file is exactly as planted
+query I
+SELECT count(*) FROM e2e.main.i1
+----
+2
+
+query I
+SELECT sum(x) FROM e2e.main.i1
+----
+3
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/i1/0.frag-000002.parquet')
+----
+1
+
+query I
+SELECT (md5(content) = (SELECT m FROM stray_md5))::INTEGER
+FROM read_blob('__TEST_DIR__/capped_e2e/i1/0.frag-000001.parquet')
+----
+1
+
+# a later ATTACH runs the sweep; with the grace at zero the unreferenced
+# stray is collected immediately, while owned files are left alone
+statement ok
+SET capped_pending_delete_grace = '0s'
+
+statement ok
+ATTACH '__TEST_DIR__/capped_e2e' AS e2eb (TYPE capped, enforce_interval '0')
+
+query I
+SELECT count(*) FROM e2eb.main.i1
+----
+2
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/i1/0.frag-000001.parquet')
+----
+0
+
+# the adopted user file survived the sweep untouched
+query I
+SELECT (md5(content) = (SELECT m FROM g_md5))::INTEGER
+FROM read_blob('__TEST_DIR__/capped_e2e/g1/9.seg.parquet')
+----
+1
+
+# directories are never GC candidates, so the (h) blocker stays — and later
+# merges keep routing around it — while the pending deletes queued earlier
+# under the default 5-minute grace are not yet due and survive as well
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/th/0.frag-000008.parquet/**')
+----
+1
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_e2e/th/0.frag-000000.parquet')
+----
+1
+
+statement ok
+SET capped_pending_delete_grace = '5min'

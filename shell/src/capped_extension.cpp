@@ -57,15 +57,25 @@ unique_ptr<Catalog> CappedAttach(optional_ptr<StorageExtensionInfo> storage_info
 		}
 	}
 	storage.EnsureRoot(fs);
-	auto catalog = make_uniq<CappedCatalog>(db, std::move(storage));
+	bool read_only = options.access_mode == AccessMode::READ_ONLY;
+	auto catalog = make_uniq<CappedCatalog>(db, std::move(storage), read_only);
 	// TTL on idle stores: apply retention at open time too, so an attach after
 	// a quiet period reflects the policy. Best effort — never fail an ATTACH
 	// over an enforcement hiccup (a corrupt manifest surfaces via queries).
-	for (auto &table : catalog->Storage().ListTables(catalog->FS())) {
-		try {
-			CappedWrite::Enforce(*catalog, table);
-		} catch (std::exception &) {
-			// ignore; correctness does not depend on this pass
+	// A READ_ONLY attach writes nothing to the store: no migration, sweep,
+	// GC or TTL eviction here, no background thread (CappedCatalog::Initialize
+	// skips it), and every write path is guarded at its entry point as well.
+	if (!read_only) {
+		for (auto &table : catalog->Storage().ListTables(catalog->FS())) {
+			try {
+				// migrate a legacy open segment, sweep due deletes, collect
+				// orphan crash leftovers (§3.7/§3.8); best effort like the
+				// enforce pass below — ATTACH must never fail over it
+				CappedWrite::AttachMaintenance(*catalog, table);
+				CappedWrite::Enforce(*catalog, table);
+			} catch (std::exception &) {
+				// ignore; correctness does not depend on this pass
+			}
 		}
 	}
 	return catalog;
@@ -173,6 +183,9 @@ void AddSegmentFunc(ClientContext &context, TableFunctionInput &data, DataChunk 
 	auto &fs = capped_catalog.FS();
 
 	auto table_dir = ResolveCappedTable(capped_catalog, bdata.table, "capped_add_segment");
+	if (capped_catalog.ReadOnly()) {
+		throw IOException("capped_add_segment: the store is attached READ_ONLY; nothing can be adopted");
+	}
 	auto prefix = table_dir + "/";
 	if (bdata.rel_path.compare(0, prefix.size(), prefix) != 0) {
 		throw IOException("capped_add_segment: path '%s' must live inside the table directory '%s/'",
@@ -322,6 +335,10 @@ unique_ptr<FunctionData> StatusBind(ClientContext &context, TableFunctionBindInp
 	return_types.emplace_back(LogicalType::BOOLEAN);
 	names.emplace_back("index_bytes");
 	return_types.emplace_back(LogicalType::BIGINT);
+	// append-only below (fragments plan §3.9): open-segment fragment file
+	// count; 0 for sealed segments (the seal clears them)
+	names.emplace_back("fragments");
+	return_types.emplace_back(LogicalType::BIGINT);
 	return bind_data;
 }
 
@@ -370,6 +387,7 @@ void StatusFunc(ClientContext &context, TableFunctionInput &data, DataChunk &out
 		output.SetValue(13, r, Value(gstate.policy.on_violation));
 		output.SetValue(14, r, Value::BOOLEAN(row.indexed));
 		output.SetValue(15, r, Value::BIGINT(row.index_bytes));
+		output.SetValue(16, r, Value::BIGINT(seg.fragments));
 	}
 	output.SetCardinality(count);
 }
@@ -536,6 +554,16 @@ struct CappedTablesGlobalState : public GlobalTableFunctionState {
 		bool has_range = false;
 		int64_t min_ts = 0;
 		int64_t max_ts = 0;
+		//! fragment files of the open segment (0 when sealed or none)
+		int64_t fragments = 0;
+		//! post-commit maintenance failures (see CappedCatalog::RecordMaintenanceFailure)
+		idx_t maintenance_failures = 0;
+		string last_maintenance_error;
+		bool has_maintenance_error = false;
+		//! cumulative Parquet bytes capped wrote, and files queued in
+		//! pending_deletes (fragments plan §3.9)
+		int64_t bytes_written = 0;
+		int64_t pending_delete_files = 0;
 		CappedPolicySummary policy;
 	};
 	vector<Row> rows;
@@ -585,6 +613,17 @@ unique_ptr<FunctionData> TablesBind(ClientContext &context, TableFunctionBindInp
 	names.emplace_back("indexed");
 	return_types.push_back(LogicalType::BIGINT);
 	names.emplace_back("index_bytes");
+	// append-only below: lotel reads this table with SELECT * (fragments plan §3.9)
+	return_types.push_back(LogicalType::BIGINT);
+	names.emplace_back("fragments");
+	return_types.push_back(LogicalType::BIGINT);
+	names.emplace_back("maintenance_failures");
+	return_types.push_back(LogicalType::VARCHAR);
+	names.emplace_back("last_maintenance_error");
+	return_types.push_back(LogicalType::BIGINT);
+	names.emplace_back("bytes_written");
+	return_types.push_back(LogicalType::BIGINT);
+	names.emplace_back("pending_delete_files");
 	return bind_data;
 }
 
@@ -596,6 +635,9 @@ unique_ptr<GlobalTableFunctionState> TablesInitGlobal(ClientContext &context, Ta
 		auto manifest = capped_catalog.Storage().ReadManifest(capped_catalog.FS(), table);
 		CappedTablesGlobalState::Row row;
 		row.table = table;
+		auto stats = CappedReadManifestStats(manifest);
+		row.bytes_written = stats.bytes_written;
+		row.pending_delete_files = stats.pending_delete_files;
 		for (auto &seg : CappedReadSegments(manifest)) {
 			row.segments++;
 			row.rows += seg.rows;
@@ -611,6 +653,7 @@ unique_ptr<GlobalTableFunctionState> TablesInitGlobal(ClientContext &context, Ta
 				}
 			} else {
 				row.has_open = true;
+				row.fragments += seg.fragments;
 			}
 			if (!seg.has_ts) {
 				continue; // segments without an event time contribute no range
@@ -625,6 +668,8 @@ unique_ptr<GlobalTableFunctionState> TablesInitGlobal(ClientContext &context, Ta
 			}
 		}
 		row.policy = CappedReadPolicySummary(manifest);
+		row.has_maintenance_error =
+		    capped_catalog.GetMaintenanceFailure(table, row.maintenance_failures, row.last_maintenance_error);
 		result->rows.push_back(std::move(row));
 	}
 	return std::move(result);
@@ -655,6 +700,12 @@ void TablesFunc(ClientContext &context, TableFunctionInput &data, DataChunk &out
 		output.SetValue(13, r, Value(row.policy.on_violation));
 		output.SetValue(14, r, Value::BIGINT(row.indexed));
 		output.SetValue(15, r, Value::BIGINT(row.index_bytes));
+		output.SetValue(16, r, Value::BIGINT(row.fragments));
+		output.SetValue(17, r, Value::BIGINT(NumericCast<int64_t>(row.maintenance_failures)));
+		output.SetValue(18, r, row.has_maintenance_error ? Value(row.last_maintenance_error)
+		                                                 : Value(LogicalType::VARCHAR));
+		output.SetValue(19, r, Value::BIGINT(row.bytes_written));
+		output.SetValue(20, r, Value::BIGINT(row.pending_delete_files));
 	}
 	output.SetCardinality(count);
 }
@@ -967,8 +1018,30 @@ void RegisterSearchFunctions(ExtensionLoader &loader) {
 	loader.RegisterFunction(vec_set);
 }
 
+//! Reject unparseable grace values where the user is looking: PhysicalSet
+//! calls this after casting and before storing, so a typo fails the SET and
+//! the bad value never reaches the store-wide reader.
+void CheckPendingDeleteGrace(ClientContext &, SetScope, Value &parameter) {
+	int64_t unused = 0;
+	if (parameter.IsNull() || parameter.type() != LogicalType::VARCHAR ||
+	    !CappedWrite::TryParseGraceMicros(parameter.GetValue<string>(), unused)) {
+		throw InvalidInputException("SET capped_pending_delete_grace: '%s' is not a duration "
+		                            "(examples: '5 min', '30s', '250ms', '0' to collect immediately)",
+		                            parameter.IsNull() ? "<NULL>" : parameter.ToString());
+	}
+}
+
 void LoadInternal(ExtensionLoader &loader) {
 	RegisterStorageExtension(loader);
+	// Test-only knob (T7): the orphan-GC age floor and the grace newly
+	// queued pending deletes get. Default = the Rust DELETE_GRACE (5 min);
+	// "0" collects crash leftovers the moment an ATTACH sees them. Stored
+	// not_before values in a manifest are never rewritten.
+	auto &db = loader.GetDatabaseInstance();
+	DBConfig::GetConfig(db).AddExtensionOption(
+	    "capped_pending_delete_grace",
+	    "capped: grace for orphan-GC candidates and newly queued pending deletes (duration, default 5 min)",
+	    LogicalType::VARCHAR, Value("5 min"), CheckPendingDeleteGrace, SetScope::GLOBAL);
 	RegisterVersionFunction(loader);
 	RegisterAddSegmentFunction(loader);
 	RegisterStatusFunction(loader);

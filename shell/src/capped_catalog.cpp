@@ -11,8 +11,8 @@
 
 namespace duckdb {
 
-CappedCatalog::CappedCatalog(AttachedDatabase &db, CappedStorageInfo storage)
-    : Catalog(db), storage(std::move(storage)) {
+CappedCatalog::CappedCatalog(AttachedDatabase &db, CappedStorageInfo storage, bool read_only)
+    : Catalog(db), storage(std::move(storage)), read_only(read_only) {
 	local_fs = make_uniq<LocalFileSystem>();
 	CreateSchemaInfo schema_info;
 	schema_info.schema = "main";
@@ -34,9 +34,10 @@ CappedCatalog::~CappedCatalog() {
 
 void CappedCatalog::Initialize(bool load_builtin) {
 	// Nothing to pre-load: manifests are read on demand. Start the background
-	// enforcement thread unless disabled (enforce_interval => 0), so an idle
-	// store still drops expired segments between writes.
-	if (storage.EnforceIntervalMicros() > 0) {
+	// enforcement thread unless disabled (enforce_interval => 0) or the store
+	// is READ_ONLY (a READ_ONLY attach must write nothing, even when idle),
+	// so an idle writable store still drops expired segments between writes.
+	if (storage.EnforceIntervalMicros() > 0 && !read_only) {
 		enforce_thread = std::thread([this] { EnforceLoop(); });
 	}
 }
@@ -181,6 +182,26 @@ CatalogEntryLookup CappedCatalog::TryLookupEntryInternal(CatalogTransaction tran
 	result.schema = main_schema.get();
 	result.entry = main_schema->LookupEntry(transaction, lookup_info);
 	return result;
+}
+
+void CappedCatalog::RecordMaintenanceFailure(const string &table, const string &error) {
+	std::lock_guard<std::mutex> guard(maintenance_mutex);
+	auto &stats = maintenance_failures[table];
+	stats.failures++;
+	stats.last_error = error;
+}
+
+bool CappedCatalog::GetMaintenanceFailure(const string &table, idx_t &failures, string &last_error) const {
+	std::lock_guard<std::mutex> guard(maintenance_mutex);
+	auto entry = maintenance_failures.find(table);
+	if (entry == maintenance_failures.end()) {
+		failures = 0;
+		last_error.clear();
+		return false;
+	}
+	failures = entry->second.failures;
+	last_error = entry->second.last_error;
+	return true;
 }
 
 } // namespace duckdb

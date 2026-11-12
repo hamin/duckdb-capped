@@ -139,9 +139,13 @@ TableFunction CappedEmptyScanFunction() {
 	return fn;
 }
 
-//! Paths of all segments from capped_manifest_list_segments output, sealed or
-//! not (open segments are ordinary parquet files, just still appendable via
-//! the merge path). Paths are store-root-relative; the caller resolves them.
+//! Every data file of every segment from capped_manifest_list_segments output:
+//! each segment's `files` list flattened in order. That list names the files a
+//! scan reads — [path] for a sealed or legacy open segment, the fragment files
+//! of a fragment-based open segment in insertion order, and empty for a fresh
+//! open segment that has written nothing yet (its `path` is only the planned
+//! sealed name, so it contributes no file). Paths are store-root-relative;
+//! the caller resolves them.
 vector<string> SegmentPaths(const string &segments_json) {
 	vector<string> paths;
 	auto *doc = duckdb_yyjson::yyjson_read(segments_json.c_str(), segments_json.size(), 0);
@@ -153,9 +157,21 @@ vector<string> SegmentPaths(const string &segments_json) {
 		duckdb_yyjson::yyjson_arr_iter iter;
 		duckdb_yyjson::yyjson_arr_iter_init(root, &iter);
 		while (auto *seg = duckdb_yyjson::yyjson_arr_iter_next(&iter)) {
-			auto *path = duckdb_yyjson::yyjson_obj_get(seg, "path");
-			if (path && duckdb_yyjson::yyjson_is_str(path)) {
-				paths.push_back(duckdb_yyjson::yyjson_get_str(path));
+			auto *files = duckdb_yyjson::yyjson_obj_get(seg, "files");
+			if (files && duckdb_yyjson::yyjson_is_arr(files)) {
+				duckdb_yyjson::yyjson_arr_iter file_iter;
+				duckdb_yyjson::yyjson_arr_iter_init(files, &file_iter);
+				while (auto *file = duckdb_yyjson::yyjson_arr_iter_next(&file_iter)) {
+					if (duckdb_yyjson::yyjson_is_str(file)) {
+						paths.push_back(duckdb_yyjson::yyjson_get_str(file));
+					}
+				}
+			} else {
+				// both halves of the extension ship as one binary, so a list
+				// without "files" can only mean the two halves disagree
+				throw InternalException("capped: segment entry in capped_manifest_list_segments output has no "
+				                        "\"files\" array: %s",
+				                        segments_json);
 			}
 		}
 	}

@@ -1,0 +1,4652 @@
+# name: test/sql/capped_fragments.test
+# description: open-segment fragments: file-count seal trigger (MAX_OPEN_FRAGMENTS)
+#              and visible post-commit maintenance failures
+# group: [sql]
+
+require capped
+
+require parquet
+
+# ---------------------------------------------------------------------------
+# MAX_OPEN_FRAGMENTS (32): with only a byte cap and the hidden ingest time,
+# should_seal never fires for a small table; the file-count seal alone keeps
+# the open segment bounded. Compaction drains tier-0/1 runs, so it is the
+# tier-2 accumulation that drives the live file count to the cap: the first
+# rotation fires between commit 1200 and 1300 here (T2's simulation saw
+# ~1111 commits per segment), hence 1300 single-row commits (one fragment,
+# one transaction each). Every 10 commits the published manifest must hold
+# <= 32 fragment files.
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH '__TEST_DIR__/capped_frag_store' AS cf (TYPE capped)
+
+statement ok
+CREATE TABLE cf.main.t32(x BIGINT) WITH (max_bytes='1GB')
+
+query IT
+SELECT maintenance_failures, COALESCE(last_maintenance_error, '<none>') FROM capped_tables('cf') WHERE table_name = 't32'
+----
+0	<none>
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (2)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (3)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (4)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (5)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (6)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (7)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (8)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (9)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (10)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (11)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (12)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (13)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (14)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (15)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (16)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (17)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (18)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (19)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (20)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (21)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (22)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (23)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (24)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (25)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (26)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (27)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (28)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (29)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (30)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (31)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (32)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (33)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (34)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (35)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (36)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (37)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (38)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (39)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (40)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (41)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (42)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (43)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (44)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (45)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (46)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (47)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (48)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (49)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (50)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (51)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (52)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (53)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (54)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (55)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (56)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (57)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (58)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (59)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (60)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (61)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (62)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (63)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (64)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (65)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (66)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (67)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (68)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (69)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (70)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (71)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (72)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (73)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (74)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (75)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (76)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (77)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (78)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (79)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (80)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (81)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (82)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (83)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (84)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (85)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (86)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (87)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (88)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (89)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (90)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (91)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (92)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (93)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (94)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (95)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (96)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (97)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (98)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (99)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (100)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (101)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (102)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (103)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (104)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (105)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (106)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (107)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (108)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (109)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (110)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (111)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (112)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (113)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (114)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (115)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (116)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (117)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (118)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (119)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (120)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (121)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (122)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (123)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (124)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (125)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (126)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (127)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (128)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (129)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (130)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (131)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (132)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (133)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (134)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (135)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (136)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (137)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (138)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (139)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (140)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (141)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (142)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (143)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (144)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (145)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (146)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (147)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (148)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (149)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (150)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (151)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (152)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (153)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (154)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (155)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (156)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (157)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (158)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (159)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (160)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (161)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (162)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (163)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (164)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (165)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (166)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (167)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (168)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (169)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (170)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (171)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (172)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (173)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (174)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (175)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (176)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (177)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (178)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (179)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (180)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (181)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (182)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (183)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (184)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (185)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (186)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (187)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (188)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (189)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (190)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (191)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (192)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (193)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (194)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (195)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (196)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (197)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (198)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (199)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (200)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (201)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (202)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (203)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (204)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (205)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (206)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (207)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (208)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (209)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (210)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (211)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (212)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (213)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (214)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (215)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (216)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (217)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (218)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (219)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (220)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (221)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (222)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (223)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (224)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (225)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (226)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (227)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (228)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (229)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (230)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (231)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (232)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (233)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (234)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (235)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (236)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (237)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (238)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (239)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (240)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (241)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (242)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (243)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (244)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (245)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (246)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (247)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (248)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (249)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (250)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (251)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (252)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (253)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (254)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (255)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (256)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (257)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (258)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (259)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (260)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (261)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (262)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (263)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (264)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (265)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (266)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (267)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (268)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (269)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (270)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (271)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (272)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (273)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (274)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (275)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (276)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (277)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (278)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (279)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (280)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (281)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (282)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (283)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (284)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (285)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (286)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (287)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (288)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (289)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (290)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (291)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (292)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (293)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (294)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (295)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (296)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (297)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (298)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (299)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (300)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (301)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (302)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (303)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (304)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (305)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (306)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (307)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (308)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (309)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (310)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (311)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (312)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (313)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (314)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (315)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (316)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (317)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (318)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (319)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (320)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (321)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (322)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (323)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (324)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (325)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (326)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (327)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (328)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (329)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (330)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (331)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (332)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (333)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (334)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (335)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (336)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (337)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (338)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (339)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (340)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (341)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (342)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (343)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (344)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (345)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (346)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (347)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (348)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (349)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (350)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (351)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (352)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (353)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (354)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (355)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (356)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (357)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (358)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (359)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (360)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (361)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (362)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (363)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (364)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (365)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (366)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (367)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (368)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (369)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (370)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (371)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (372)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (373)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (374)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (375)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (376)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (377)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (378)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (379)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (380)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (381)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (382)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (383)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (384)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (385)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (386)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (387)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (388)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (389)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (390)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (391)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (392)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (393)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (394)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (395)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (396)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (397)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (398)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (399)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (400)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (401)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (402)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (403)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (404)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (405)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (406)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (407)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (408)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (409)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (410)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (411)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (412)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (413)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (414)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (415)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (416)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (417)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (418)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (419)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (420)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (421)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (422)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (423)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (424)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (425)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (426)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (427)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (428)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (429)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (430)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (431)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (432)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (433)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (434)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (435)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (436)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (437)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (438)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (439)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (440)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (441)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (442)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (443)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (444)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (445)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (446)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (447)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (448)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (449)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (450)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (451)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (452)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (453)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (454)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (455)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (456)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (457)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (458)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (459)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (460)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (461)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (462)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (463)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (464)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (465)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (466)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (467)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (468)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (469)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (470)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (471)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (472)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (473)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (474)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (475)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (476)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (477)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (478)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (479)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (480)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (481)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (482)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (483)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (484)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (485)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (486)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (487)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (488)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (489)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (490)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (491)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (492)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (493)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (494)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (495)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (496)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (497)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (498)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (499)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (500)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (501)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (502)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (503)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (504)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (505)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (506)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (507)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (508)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (509)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (510)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (511)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (512)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (513)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (514)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (515)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (516)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (517)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (518)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (519)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (520)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (521)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (522)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (523)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (524)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (525)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (526)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (527)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (528)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (529)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (530)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (531)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (532)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (533)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (534)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (535)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (536)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (537)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (538)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (539)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (540)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (541)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (542)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (543)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (544)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (545)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (546)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (547)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (548)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (549)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (550)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (551)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (552)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (553)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (554)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (555)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (556)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (557)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (558)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (559)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (560)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (561)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (562)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (563)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (564)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (565)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (566)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (567)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (568)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (569)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (570)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (571)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (572)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (573)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (574)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (575)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (576)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (577)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (578)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (579)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (580)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (581)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (582)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (583)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (584)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (585)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (586)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (587)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (588)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (589)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (590)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (591)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (592)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (593)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (594)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (595)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (596)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (597)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (598)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (599)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (600)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (601)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (602)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (603)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (604)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (605)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (606)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (607)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (608)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (609)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (610)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (611)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (612)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (613)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (614)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (615)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (616)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (617)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (618)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (619)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (620)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (621)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (622)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (623)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (624)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (625)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (626)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (627)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (628)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (629)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (630)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (631)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (632)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (633)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (634)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (635)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (636)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (637)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (638)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (639)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (640)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (641)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (642)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (643)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (644)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (645)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (646)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (647)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (648)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (649)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (650)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (651)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (652)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (653)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (654)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (655)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (656)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (657)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (658)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (659)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (660)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (661)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (662)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (663)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (664)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (665)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (666)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (667)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (668)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (669)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (670)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (671)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (672)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (673)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (674)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (675)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (676)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (677)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (678)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (679)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (680)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (681)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (682)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (683)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (684)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (685)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (686)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (687)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (688)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (689)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (690)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (691)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (692)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (693)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (694)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (695)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (696)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (697)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (698)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (699)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (700)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (701)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (702)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (703)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (704)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (705)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (706)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (707)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (708)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (709)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (710)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (711)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (712)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (713)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (714)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (715)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (716)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (717)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (718)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (719)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (720)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (721)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (722)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (723)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (724)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (725)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (726)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (727)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (728)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (729)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (730)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (731)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (732)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (733)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (734)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (735)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (736)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (737)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (738)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (739)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (740)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (741)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (742)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (743)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (744)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (745)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (746)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (747)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (748)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (749)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (750)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (751)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (752)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (753)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (754)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (755)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (756)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (757)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (758)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (759)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (760)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (761)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (762)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (763)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (764)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (765)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (766)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (767)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (768)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (769)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (770)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (771)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (772)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (773)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (774)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (775)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (776)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (777)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (778)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (779)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (780)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (781)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (782)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (783)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (784)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (785)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (786)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (787)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (788)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (789)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (790)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (791)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (792)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (793)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (794)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (795)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (796)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (797)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (798)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (799)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (800)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (801)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (802)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (803)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (804)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (805)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (806)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (807)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (808)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (809)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (810)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (811)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (812)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (813)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (814)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (815)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (816)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (817)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (818)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (819)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (820)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (821)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (822)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (823)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (824)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (825)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (826)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (827)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (828)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (829)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (830)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (831)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (832)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (833)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (834)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (835)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (836)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (837)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (838)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (839)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (840)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (841)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (842)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (843)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (844)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (845)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (846)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (847)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (848)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (849)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (850)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (851)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (852)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (853)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (854)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (855)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (856)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (857)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (858)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (859)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (860)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (861)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (862)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (863)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (864)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (865)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (866)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (867)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (868)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (869)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (870)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (871)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (872)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (873)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (874)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (875)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (876)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (877)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (878)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (879)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (880)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (881)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (882)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (883)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (884)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (885)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (886)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (887)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (888)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (889)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (890)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (891)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (892)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (893)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (894)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (895)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (896)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (897)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (898)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (899)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (900)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (901)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (902)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (903)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (904)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (905)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (906)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (907)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (908)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (909)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (910)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (911)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (912)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (913)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (914)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (915)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (916)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (917)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (918)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (919)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (920)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (921)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (922)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (923)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (924)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (925)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (926)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (927)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (928)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (929)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (930)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (931)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (932)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (933)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (934)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (935)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (936)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (937)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (938)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (939)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (940)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (941)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (942)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (943)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (944)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (945)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (946)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (947)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (948)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (949)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (950)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (951)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (952)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (953)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (954)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (955)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (956)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (957)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (958)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (959)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (960)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (961)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (962)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (963)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (964)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (965)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (966)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (967)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (968)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (969)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (970)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (971)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (972)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (973)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (974)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (975)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (976)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (977)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (978)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (979)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (980)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (981)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (982)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (983)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (984)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (985)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (986)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (987)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (988)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (989)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (990)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (991)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (992)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (993)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (994)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (995)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (996)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (997)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (998)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (999)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1000)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1001)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1002)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1003)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1004)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1005)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1006)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1007)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1008)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1009)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1010)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1011)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1012)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1013)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1014)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1015)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1016)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1017)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1018)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1019)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1020)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1021)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1022)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1023)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1024)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1025)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1026)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1027)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1028)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1029)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1030)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1031)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1032)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1033)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1034)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1035)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1036)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1037)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1038)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1039)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1040)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1041)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1042)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1043)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1044)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1045)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1046)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1047)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1048)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1049)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1050)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1051)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1052)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1053)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1054)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1055)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1056)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1057)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1058)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1059)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1060)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1061)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1062)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1063)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1064)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1065)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1066)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1067)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1068)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1069)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1070)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1071)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1072)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1073)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1074)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1075)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1076)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1077)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1078)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1079)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1080)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1081)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1082)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1083)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1084)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1085)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1086)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1087)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1088)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1089)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1090)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1091)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1092)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1093)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1094)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1095)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1096)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1097)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1098)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1099)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1100)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1101)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1102)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1103)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1104)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1105)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1106)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1107)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1108)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1109)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1110)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1111)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1112)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1113)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1114)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1115)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1116)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1117)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1118)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1119)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1120)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1121)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1122)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1123)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1124)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1125)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1126)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1127)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1128)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1129)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1130)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1131)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1132)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1133)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1134)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1135)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1136)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1137)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1138)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1139)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1140)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1141)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1142)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1143)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1144)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1145)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1146)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1147)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1148)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1149)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1150)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1151)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1152)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1153)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1154)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1155)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1156)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1157)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1158)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1159)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1160)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1161)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1162)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1163)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1164)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1165)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1166)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1167)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1168)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1169)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1170)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1171)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1172)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1173)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1174)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1175)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1176)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1177)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1178)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1179)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1180)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1181)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1182)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1183)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1184)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1185)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1186)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1187)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1188)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1189)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1190)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1191)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1192)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1193)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1194)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1195)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1196)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1197)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1198)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1199)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1200)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1201)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1202)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1203)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1204)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1205)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1206)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1207)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1208)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1209)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1210)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1211)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1212)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1213)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1214)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1215)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1216)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1217)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1218)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1219)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1220)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1221)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1222)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1223)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1224)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1225)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1226)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1227)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1228)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1229)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1230)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1231)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1232)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1233)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1234)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1235)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1236)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1237)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1238)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1239)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1240)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1241)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1242)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1243)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1244)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1245)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1246)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1247)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1248)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1249)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1250)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1251)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1252)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1253)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1254)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1255)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1256)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1257)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1258)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1259)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1260)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1261)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1262)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1263)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1264)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1265)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1266)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1267)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1268)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1269)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1270)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1271)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1272)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1273)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1274)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1275)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1276)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1277)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1278)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1279)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1280)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1281)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1282)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1283)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1284)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1285)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1286)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1287)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1288)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1289)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1290)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1291)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1292)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1293)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1294)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1295)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1296)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1297)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1298)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1299)
+
+statement ok
+INSERT INTO cf.main.t32 VALUES (1300)
+
+query I
+SELECT count(*) FROM capped_tables('cf') WHERE table_name = 't32' AND fragments > 32
+----
+0
+
+query II
+SELECT count(*), sum(x) FROM cf.main.t32
+----
+1300	845650
+
+# the trigger really rotated the segment: sealed segments exist, and no
+# maintenance ever failed on this table
+query I
+SELECT (count(*) > 0)::INTEGER FROM capped_status('cf','t32') WHERE sealed
+----
+1
+
+query IT
+SELECT maintenance_failures, COALESCE(last_maintenance_error, '<none>') FROM capped_tables('cf') WHERE table_name = 't32'
+----
+0	<none>
+
+# ---------------------------------------------------------------------------
+# Post-commit maintenance failures stay visible: block the next merge output
+# (tfail/0.frag-000008.parquet becomes a DIRECTORY via a partitioned COPY,
+# which touches none of the fragment files a scan reads), then commit the
+# row whose flush triggers that merge. The INSERT must succeed anyway, the
+# rows stay readable, and capped_tables reports the failure.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE cf.main.tfail(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO cf.main.tfail VALUES (1)
+
+statement ok
+INSERT INTO cf.main.tfail VALUES (2)
+
+statement ok
+INSERT INTO cf.main.tfail VALUES (3)
+
+statement ok
+INSERT INTO cf.main.tfail VALUES (4)
+
+statement ok
+INSERT INTO cf.main.tfail VALUES (5)
+
+statement ok
+INSERT INTO cf.main.tfail VALUES (6)
+
+statement ok
+INSERT INTO cf.main.tfail VALUES (7)
+
+query IT
+SELECT maintenance_failures, COALESCE(last_maintenance_error, '<none>') FROM capped_tables('cf') WHERE table_name = 'tfail'
+----
+0	<none>
+
+# the first merge fires on the 8th commit and outputs seq 8
+statement ok
+COPY (SELECT 1 AS p, 'x' AS v) TO '__TEST_DIR__/capped_frag_store/tfail/0.frag-000008.parquet' (FORMAT parquet, PARTITION_BY (p))
+
+statement ok
+INSERT INTO cf.main.tfail VALUES (8)
+
+query II
+SELECT count(*), sum(x) FROM cf.main.tfail
+----
+8	36
+
+query II
+SELECT (maintenance_failures >= 1)::INTEGER, (length(last_maintenance_error) > 0)::INTEGER FROM capped_tables('cf') WHERE table_name = 'tfail'
+----
+1	1
+

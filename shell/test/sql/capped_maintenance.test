@@ -1,0 +1,534 @@
+# name: test/sql/capped_maintenance.test
+# description: ATTACH-time maintenance: legacy open-segment migration (§3.8),
+#              pending-delete sweep timing (§3.7), orphan GC safety (§3.7),
+#              and READ_ONLY ATTACH doing nothing on disk
+# group: [sql]
+
+require capped
+
+require parquet
+
+# All ATTACHes use enforce_interval '0': no background thread racing the
+# assertions; capped_enforce() drives the pass explicitly where needed.
+
+# ---------------------------------------------------------------------------
+# (a) Legacy store (§3.8): a pre-fragment open segment (single complete
+# Parquet file, rows > 0, no fragments) is sealed IN PLACE at ATTACH — same
+# path, same rows, no rewrite. A later INSERT then starts a fresh
+# fragment-based open segment; all rows stay readable throughout.
+# The manifest is planted byte-for-byte with a CSV COPY (unit separator
+# delimiter,  quote: neither occurs in JSON, so the field goes out raw).
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_legacy' AS lg (TYPE capped, enforce_interval '0')
+
+statement ok
+CREATE TABLE lg.main.legacy(x BIGINT) WITH (max_bytes='1GB')
+
+# the legacy manifest: id 9, open (sealed=false), no fragments
+statement ok
+COPY (SELECT '{"table":"legacy","columns":[{"name":"x","type":"BIGINT"}],"policy":{"time_source":"IngestTime","ttl":null,"max_bytes":1000000000,"grace":0,"evict_order":"Time","on_violation":"Evict"},"segments":[{"id":9,"path":"legacy/9.seg.parquet","rows":5,"bytes":321,"min_ts":null,"max_ts":null,"sealed":false,"sealed_at":null,"index_file":null}],"next_segment_id":10}' AS m) TO '__TEST_DIR__/capped_maint_legacy/legacy/manifest.json' (FORMAT csv, DELIMITER '', QUOTE '', HEADER false)
+
+# the legacy open segment's data file: BIGINT to match the manifest column
+statement ok
+COPY (SELECT UNNEST([1,2,3,4,5]::BIGINT[]) AS x) TO '__TEST_DIR__/capped_maint_legacy/legacy/9.seg.parquet' (FORMAT parquet)
+
+# a second ATTACH runs the migration pass against the planted manifest
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_legacy' AS lg2 (TYPE capped, enforce_interval '0')
+
+# sealed in place: same path, rows intact, no extra file
+query ITT
+SELECT sealed, path, rows FROM capped_status('lg2', 'legacy') WHERE segment_id = 9
+----
+1	legacy/9.seg.parquet	5
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_legacy/legacy/*') WHERE file LIKE '%9.seg.parquet'
+----
+1
+
+query II
+SELECT count(*), sum(x) FROM lg2.main.legacy
+----
+5	15
+
+statement ok
+INSERT INTO lg2.main.legacy VALUES (6)
+
+query II
+SELECT count(*), sum(x) FROM lg2.main.legacy
+----
+6	21
+
+# a fresh fragment-based open segment took over beside the migrated one
+query I
+SELECT fragments FROM capped_tables('lg2') WHERE table_name = 'legacy'
+----
+1
+
+query IT
+SELECT maintenance_failures, COALESCE(last_maintenance_error, '<none>') FROM capped_tables('lg2') WHERE table_name = 'legacy'
+----
+0	<none>
+
+
+# ---------------------------------------------------------------------------
+# (b) Sweep timing (§3.7): a merge queues its inputs as pending deletes at
+# not_before = now + grace. Under the default 5-minute grace the files sit
+# on disk even across capped_enforce() — the sweep deletes nothing before
+# its not_before. With the test-only grace override set BEFORE the merge,
+# newly queued deletes land at not_before = now and the flush's own sweep
+# removes them; already-stored not_before values stay honoured as written.
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_sweep' AS sw (TYPE capped, enforce_interval '0')
+
+statement ok
+CREATE TABLE sw.main.t5(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO sw.main.t5 VALUES (1)
+
+statement ok
+INSERT INTO sw.main.t5 VALUES (2)
+
+statement ok
+INSERT INTO sw.main.t5 VALUES (3)
+
+statement ok
+INSERT INTO sw.main.t5 VALUES (4)
+
+statement ok
+INSERT INTO sw.main.t5 VALUES (5)
+
+statement ok
+INSERT INTO sw.main.t5 VALUES (6)
+
+statement ok
+INSERT INTO sw.main.t5 VALUES (7)
+
+statement ok
+INSERT INTO sw.main.t5 VALUES (8)
+
+# commit 8 fired the K=8 merge: the 8 inputs are pending, still on disk,
+# and the merge output is live
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_sweep/t5/0.frag-00000?.parquet') WHERE file NOT LIKE '%000008%'
+----
+8
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_sweep/t5/0.frag-000008.parquet')
+----
+1
+
+statement ok
+SELECT * FROM capped_enforce('sw', 't5')
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_sweep/t5/0.frag-00000?.parquet') WHERE file NOT LIKE '%000008%'
+----
+8
+
+# the override affects NEW queues only: t5's pending entries keep their
+# stored not_before and survive further enforce passes
+statement ok
+SET capped_pending_delete_grace = '0s'
+
+statement ok
+SELECT * FROM capped_enforce('sw', 't5')
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_sweep/t5/0.frag-00000?.parquet') WHERE file NOT LIKE '%000008%'
+----
+8
+
+statement ok
+CREATE TABLE sw.main.t0(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO sw.main.t0 VALUES (1)
+
+statement ok
+INSERT INTO sw.main.t0 VALUES (2)
+
+statement ok
+INSERT INTO sw.main.t0 VALUES (3)
+
+statement ok
+INSERT INTO sw.main.t0 VALUES (4)
+
+statement ok
+INSERT INTO sw.main.t0 VALUES (5)
+
+statement ok
+INSERT INTO sw.main.t0 VALUES (6)
+
+statement ok
+INSERT INTO sw.main.t0 VALUES (7)
+
+statement ok
+INSERT INTO sw.main.t0 VALUES (8)
+
+# queued with grace 0, so the flush's sweep step already collected them
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_sweep/t0/0.frag-00000?.parquet') WHERE file NOT LIKE '%000008%'
+----
+0
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_sweep/t0/0.frag-000008.parquet')
+----
+1
+
+query II
+SELECT count(*), sum(x) FROM sw.main.t0
+----
+8	36
+
+query I
+SELECT count(*) FROM capped_tables('sw') WHERE maintenance_failures > 0
+----
+0
+
+# restore the default for the following sections
+statement ok
+SET capped_pending_delete_grace = '5min'
+
+
+# ---------------------------------------------------------------------------
+# (c) Orphan GC safety (§3.7). Seed: 8 commits (merge queues 0.frag-000000..7
+# at the 5-minute grace), capped_seal (adopts 0.frag-000008.parquet as the
+# sealed segment's file), commit 9 (open segment id 1, one fragment).
+# Then plant, and ATTACH with grace 0 so the age floor passes for fresh
+# files. GC must delete EXACTLY:
+#   g/0.frag-000123.parquet     — orphan fragment name, owned by nothing
+#   g/.flush-999999.tmp.parquet — orphan flush temporary, owned by nothing
+#   g/0.seg-000055.parquet      — orphan seal-fallback name, owned by nothing
+#   g/1.seg.parquet             — planned path of the CURRENT open segment 1
+# and keep: g/data_extra.parquet (user file: no pattern match), the pending
+# 0.frag-000000..7 and the live 0.frag-000008 / 1.frag-000000 (owned paths),
+# manifest.json, and the partitioned-COPY subdirectory g/p=9/ including the
+# fragment-named file inside it (GC never recurses).
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_gc' AS gc1 (TYPE capped, enforce_interval '0')
+
+statement ok
+CREATE TABLE gc1.main.g(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO gc1.main.g VALUES (1)
+
+statement ok
+INSERT INTO gc1.main.g VALUES (2)
+
+statement ok
+INSERT INTO gc1.main.g VALUES (3)
+
+statement ok
+INSERT INTO gc1.main.g VALUES (4)
+
+statement ok
+INSERT INTO gc1.main.g VALUES (5)
+
+statement ok
+INSERT INTO gc1.main.g VALUES (6)
+
+statement ok
+INSERT INTO gc1.main.g VALUES (7)
+
+statement ok
+INSERT INTO gc1.main.g VALUES (8)
+
+statement ok
+SELECT * FROM capped_seal('gc1', 'g')
+
+statement ok
+INSERT INTO gc1.main.g VALUES (9)
+
+statement ok
+COPY (SELECT 1::BIGINT AS x) TO '__TEST_DIR__/capped_maint_gc/g/data_extra.parquet' (FORMAT parquet)
+
+statement ok
+COPY (SELECT 1::BIGINT AS x) TO '__TEST_DIR__/capped_maint_gc/g/0.frag-000123.parquet' (FORMAT parquet)
+
+statement ok
+COPY (SELECT 1::BIGINT AS x) TO '__TEST_DIR__/capped_maint_gc/g/.flush-999999.tmp.parquet' (FORMAT parquet)
+
+statement ok
+COPY (SELECT 1::BIGINT AS x) TO '__TEST_DIR__/capped_maint_gc/g/0.seg-000055.parquet' (FORMAT parquet)
+
+statement ok
+COPY (SELECT 1::BIGINT AS x) TO '__TEST_DIR__/capped_maint_gc/g/1.seg.parquet' (FORMAT parquet)
+
+# a fragment-named file inside a SUBDIRECTORY of the table dir
+statement ok
+COPY (SELECT 9 AS p, 'x' AS v) TO '__TEST_DIR__/capped_maint_gc/g' (FORMAT parquet, PARTITION_BY (p), APPEND true, FILENAME_PATTERN '0.frag-000000_{uuid}')
+
+statement ok
+SET capped_pending_delete_grace = '0s'
+
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_gc' AS gc2 (TYPE capped, enforce_interval '0')
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/0.frag-000123.parquet')
+----
+0
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/.flush-999999.tmp.parquet')
+----
+0
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/0.seg-000055.parquet')
+----
+0
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/1.seg.parquet')
+----
+0
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/data_extra.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/0.frag-000000.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/0.frag-000007.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/0.frag-000008.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/1.frag-000000.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/manifest.json')
+----
+1
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/p=9/0.frag-000000*.parquet')
+----
+1
+
+query II
+SELECT count(*), sum(x) FROM gc2.main.g
+----
+9	45
+
+query IT
+SELECT maintenance_failures, COALESCE(last_maintenance_error, '<none>') FROM capped_tables('gc2') WHERE table_name = 'g'
+----
+0	<none>
+
+# grace back to 5 minutes: a freshly planted orphan must survive an ATTACH
+statement ok
+SET capped_pending_delete_grace = '5min'
+
+statement ok
+COPY (SELECT 1::BIGINT AS x) TO '__TEST_DIR__/capped_maint_gc/g/0.frag-000456.parquet' (FORMAT parquet)
+
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_gc' AS gc3 (TYPE capped, enforce_interval '0')
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_gc/g/0.frag-000456.parquet')
+----
+1
+
+query II
+SELECT count(*), sum(x) FROM gc3.main.g
+----
+9	45
+
+
+# ---------------------------------------------------------------------------
+# (d) READ_ONLY ATTACH: no migration, no sweep, no GC — the table directory
+# comes out exactly as it went in. (Nothing is due and no orphan is old
+# here, so even the untouched enforce pass is a no-op on this store.)
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TEMP TABLE ro_before AS SELECT file FROM glob('__TEST_DIR__/capped_maint_gc/g/*')
+
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_gc' AS gc4 (TYPE capped, READ_ONLY, enforce_interval '0')
+
+query I
+SELECT count(*) FROM (SELECT file FROM glob('__TEST_DIR__/capped_maint_gc/g/*') EXCEPT SELECT * FROM ro_before)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT * FROM ro_before EXCEPT SELECT file FROM glob('__TEST_DIR__/capped_maint_gc/g/*'))
+----
+0
+
+query II
+SELECT count(*), sum(x) FROM gc4.main.g
+----
+9	45
+
+# ---------------------------------------------------------------------------
+# (d, continued) A store that genuinely tempts the writers: all 8 pending
+# deletes are patched to not_before = 0 (due now, as if the clock had moved
+# on) and the sealed segment is expired (ttl '1 second'). A writable catalog
+# would evict the segment and sweep the files on its 1-second background
+# cadence. A READ_ONLY attach must not touch a single byte — not under a
+# manual capped_enforce(), not after a busy wait longer than the interval,
+# not even through a failed INSERT or capped_seal attempt.
+# ---------------------------------------------------------------------------
+
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_ro' AS rw (TYPE capped, enforce_interval '0')
+
+statement ok
+CREATE TABLE rw.main.r(x BIGINT) WITH (max_bytes='10GB', ttl='1 second')
+
+statement ok
+INSERT INTO rw.main.r VALUES (1)
+
+statement ok
+INSERT INTO rw.main.r VALUES (2)
+
+statement ok
+INSERT INTO rw.main.r VALUES (3)
+
+statement ok
+INSERT INTO rw.main.r VALUES (4)
+
+statement ok
+INSERT INTO rw.main.r VALUES (5)
+
+statement ok
+INSERT INTO rw.main.r VALUES (6)
+
+statement ok
+INSERT INTO rw.main.r VALUES (7)
+
+statement ok
+INSERT INTO rw.main.r VALUES (8)
+
+statement ok
+SELECT * FROM capped_seal('rw', 'r')
+
+statement ok
+INSERT INTO rw.main.r VALUES (9)
+
+# make every pending delete due now (not_before = 0)
+statement ok
+CREATE TEMP TABLE patched AS SELECT regexp_replace(content, '"not_before":\s*\d+', '"not_before":0', 'g') AS m FROM read_text('__TEST_DIR__/capped_maint_ro/r/manifest.json')
+
+statement ok
+COPY patched TO '__TEST_DIR__/capped_maint_ro/r/manifest.json' (FORMAT csv, DELIMITER '', QUOTE '', HEADER false)
+
+statement ok
+DROP TABLE patched
+
+query I
+SELECT ((length(content) - length(replace(content, '"not_before":0', ''))) / 14)::INTEGER FROM read_text('__TEST_DIR__/capped_maint_ro/r/manifest.json')
+----
+8
+
+# snapshot the whole top-level listing and the manifest bytes
+statement ok
+CREATE TEMP TABLE ro2_dir AS SELECT file FROM glob('__TEST_DIR__/capped_maint_ro/r/*')
+
+statement ok
+CREATE TEMP TABLE ro2_manifest AS SELECT md5(content) AS h FROM read_text('__TEST_DIR__/capped_maint_ro/r/manifest.json')
+
+# READ_ONLY attach with a lively 1-second background enforce cadence
+statement ok
+ATTACH '__TEST_DIR__/capped_maint_ro' AS ro (TYPE capped, READ_ONLY, enforce_interval '1 second')
+
+# the manual enforce pass is a no-op (a READ_ONLY attach starts no background
+# thread, and the sweep would refuse to touch anything anyway)
+statement ok
+SELECT * FROM capped_enforce('ro', 'r')
+
+# nothing moved: same directory set, byte-identical manifest, pending files
+# still on disk, the expired sealed segment still there, rows intact
+query I
+SELECT count(*) FROM (SELECT file FROM glob('__TEST_DIR__/capped_maint_ro/r/*') EXCEPT SELECT * FROM ro2_dir)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT * FROM ro2_dir EXCEPT SELECT file FROM glob('__TEST_DIR__/capped_maint_ro/r/*'))
+----
+0
+
+query I
+SELECT (md5(content) = (SELECT h FROM ro2_manifest))::INTEGER FROM read_text('__TEST_DIR__/capped_maint_ro/r/manifest.json')
+----
+1
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_maint_ro/r/0.frag-00000?.parquet') WHERE file NOT LIKE '%000008%'
+----
+8
+
+query I
+SELECT count(*) FROM capped_status('ro', 'r') WHERE sealed
+----
+1
+
+query II
+SELECT count(*), sum(x) FROM ro.main.r
+----
+9	45
+
+# user data writes fail too (DuckDB itself refuses; capped guards its own
+# write path as a backstop)
+statement error
+INSERT INTO ro.main.r VALUES (99)
+----
+read-only
+
+statement ok
+SELECT * FROM capped_seal('ro', 'r')
+
+query I
+SELECT (md5(content) = (SELECT h FROM ro2_manifest))::INTEGER FROM read_text('__TEST_DIR__/capped_maint_ro/r/manifest.json')
+----
+1
+
+query I
+SELECT fragments FROM capped_tables('ro') WHERE table_name = 'r'
+----
+1
+
+# an unparseable grace is rejected at SET time, not silently swallowed
+statement error
+SET capped_pending_delete_grace = 'banana'
+----
+not a duration
+
+statement error
+SET capped_pending_delete_grace = '-1s'
+----
+not a duration
+
+statement ok
+SET capped_pending_delete_grace = '0s'
+

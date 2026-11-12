@@ -14,8 +14,9 @@
 //! - Every entry point catches panics: a Rust panic must never unwind into
 //!   C++ frames.
 
+use crate::compaction::{plan_compaction, CompactionLimits, CompactionPlan, MAX_OPEN_FRAGMENTS};
 use crate::eviction::{plan_eviction, should_seal, SealLimits};
-use crate::manifest::{Column, Manifest, SegmentId, SegmentMeta};
+use crate::manifest::{Column, FragmentMeta, Manifest, SegmentId, SegmentMeta};
 use crate::search::{index_path_for, SearchSpec, VectorMetric};
 use crate::policy::{
     parse_duration, parse_size, EvictOrder, OnViolation, RetentionPolicy, TimeSource, INGEST_TS_COLUMN,
@@ -473,6 +474,37 @@ pub unsafe extern "C" fn capped_manifest_next_segment_id(
     )
 }
 
+/// next_fragment_seq of the open segment: the shell assigns fragment seqs from
+/// this (fragments plan §3.1: per segment, monotonic, never reused, merged
+/// outputs take a fresh seq). Errors when the manifest has no open segment.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_next_fragment_seq(
+    manifest_json: *const c_char,
+    out_seq: *mut i64,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            if out_seq.is_null() {
+                return Err("out_seq is null".to_string());
+            }
+            let m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            let open = m
+                .open_segment()
+                .ok_or_else(|| "manifest has no open segment".to_string())?;
+            *out_seq = open.next_fragment_seq as i64;
+            Ok(())
+        },
+        out_err,
+    )
+}
+
 /// The event-time column of the manifest's policy. Ingest-time policies report
 /// the canonical hidden column name ([`INGEST_TS_COLUMN`]), so callers can read
 /// it from the segment files like any other time column.
@@ -502,8 +534,13 @@ pub unsafe extern "C" fn capped_manifest_time_col(
 }
 
 /// All segments as `[{"id":0,"path":"t/segments/0.seg.parquet","rows":3,
-/// "bytes":123,"sealed":true}]`. Paths are relative to the store root; the
-/// shell resolves them.
+/// "bytes":123,"sealed":true,"files":["t/segments/0.seg.parquet"],
+/// "fragments":0}]`. Paths are relative to the store root; the shell resolves
+/// them. `files` is the list a scan reads: `[path]` for a sealed segment, the
+/// fragment paths in insertion order for a fragment-based open segment, and
+/// `[path]` for a legacy open segment (empty only for a not-yet-written open
+/// segment). `fragments` is the open segment's file count (0 when sealed).
+/// `path` stays the sealed/planned path (status tooling reads it).
 ///
 /// # Safety
 ///
@@ -523,6 +560,13 @@ pub unsafe extern "C" fn capped_manifest_list_segments(
                 .segments
                 .iter()
                 .map(|s| {
+                    let files: Vec<&str> = if s.sealed || s.is_legacy_open() {
+                        vec![s.path.as_str()]
+                    } else if s.fragments.is_empty() {
+                        Vec::new() // fresh open segment: no data file yet
+                    } else {
+                        s.fragments.iter().map(|f| f.path.as_str()).collect()
+                    };
                     serde_json::json!({
                         "id": s.id.0,
                         "path": s.path,
@@ -532,6 +576,8 @@ pub unsafe extern "C" fn capped_manifest_list_segments(
                         "max_ts": s.max_ts,
                         "sealed": s.sealed,
                         "index_file": s.index_file,
+                        "files": files,
+                        "fragments": s.fragments.len(),
                     })
                 })
                 .collect();
@@ -588,6 +634,344 @@ pub unsafe extern "C" fn capped_manifest_remove_segments(
                 .map_err(|e| format!("ids: {e}"))?;
             m.remove_segments(&ids.into_iter().map(SegmentId).collect::<Vec<_>>());
             write_string(out_manifest_json, serde_json::to_string(&m).unwrap())
+        },
+        out_err,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// open-segment fragments (fragments plan §3.3–§3.8): commit writes a fragment
+// file, `plan_compaction`/`apply_compaction` merge runs of fragments, `seal_open`
+// is the final compaction, and the sweep/GC helpers retire files the manifest
+// no longer references. In every case the manifest swap (persisting
+// out_manifest_json) is the single commit point.
+// ---------------------------------------------------------------------------
+
+/// Record a written fragment file on the open segment (fragments plan §3.3):
+/// the shell has already COPY'd the file to `fragment_json`'s path, this makes
+/// the manifest name it, keeps the open segment's aggregates in step with its
+/// fragments, and bumps `write_stats`. `fragment_json` is a `FragmentMeta`:
+/// `{"seq":4,"path":"t/1.frag-000004.parquet","rows":12,"bytes":512,
+///   "min_ts":123,"max_ts":456,"tier":0}`
+/// (`tier` 0 for commit-written fragments; seqs are never reused, the caller
+/// allocates them from `next_fragment_seq` in the manifest). Rejects legacy
+/// open segments (migrate first) and reused/used-up seq numbers.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_add_fragment(
+    manifest_json: *const c_char,
+    segment_id: i64,
+    fragment_json: *const c_char,
+    out_manifest_json: *mut *mut c_char,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            let mut m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            if segment_id < 0 {
+                return Err(format!("segment_id must be >= 0, got {segment_id}"));
+            }
+            let frag: FragmentMeta =
+                serde_json::from_str(input(fragment_json, "fragment_json")?)
+                    .map_err(|e| format!("fragment: {e}"))?;
+            m.add_fragment(SegmentId(segment_id as u64), frag)?;
+            write_string(out_manifest_json, serde_json::to_string(&m).unwrap())
+        },
+        out_err,
+    )
+}
+
+/// The next fragment merge for the open segment under the built-in size-tiered
+/// limits (fan-in K=8, max tier T=2; fragments plan §3.4), or JSON `null` when
+/// nothing qualifies. The shell runs this in a loop, applying each plan until
+/// it gets `null` (a tier-1 merge can cascade into a tier-2 merge).
+/// Output: `{"segment":1,"inputs":[4,5,6,7,8,9,10,11],"output_tier":1,
+///   "input_paths":["t/1.frag-000004.parquet",...]}` —
+/// `inputs` are fragment seqs, always a contiguous same-tier run, and
+/// `input_paths` the same run's store-relative file paths in order (added
+/// convenience for the shell's merge COPY; `capped_manifest_apply_compaction`
+/// ignores it); the shell COPYs the output file and hands the plan plus the
+/// output `FragmentMeta` to `capped_manifest_apply_compaction`.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_plan_compaction(
+    manifest_json: *const c_char,
+    out_plan_json: *mut *mut c_char,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            let m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            match m.open_segment().and_then(|open| plan_compaction(open, &CompactionLimits::default())) {
+                Some(plan) => {
+                    let open = m.open_segment().unwrap();
+                    let input_paths: Vec<&str> = plan
+                        .inputs
+                        .iter()
+                        .map(|seq| {
+                            open.fragments
+                                .iter()
+                                .find(|f| f.seq == *seq)
+                                .map(|f| f.path.as_str())
+                                .ok_or_else(|| {
+                                    format!("plan input seq {seq} is not a fragment of open segment {}", plan.segment.0)
+                                })
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    write_string(
+                        out_plan_json,
+                        serde_json::json!({
+                            "segment": plan.segment.0,
+                            "inputs": plan.inputs,
+                            "output_tier": plan.output_tier,
+                            "input_paths": input_paths,
+                        })
+                        .to_string(),
+                    )
+                }
+                None => write_string(out_plan_json, "null".to_string()),
+            }
+        },
+        out_err,
+    )
+}
+
+/// Commit a merge written to disk (fragments plan §3.4): replaces the `inputs`
+/// run named by `plan_json` (as returned by `capped_plan_compaction`) with the
+/// already-written `output_fragment_json` (`FragmentMeta` with a fresh seq and
+/// `tier` one above the inputs) at the run's list position, so insertion order
+/// is preserved; the input files move to `pending_deletes` with
+/// `not_before = now_micros + 5 min` and `write_stats` is bumped for the
+/// output. `plan.segment` selects the open segment.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_apply_compaction(
+    manifest_json: *const c_char,
+    plan_json: *const c_char,
+    output_fragment_json: *const c_char,
+    now_micros: i64,
+    out_manifest_json: *mut *mut c_char,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            let mut m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            let plan: CompactionPlan = serde_json::from_str(input(plan_json, "plan_json")?)
+                .map_err(|e| format!("plan: {e}"))?;
+            let output: FragmentMeta =
+                serde_json::from_str(input(output_fragment_json, "output_fragment_json")?)
+                    .map_err(|e| format!("output_fragment: {e}"))?;
+            m.apply_compaction(plan.segment, &plan.inputs, output, now_micros)?;
+            write_string(out_manifest_json, serde_json::to_string(&m).unwrap())
+        },
+        out_err,
+    )
+}
+
+/// Seal the open segment whose fragments the shell has merged into the final
+/// file (fragments plan §3.5): `output_segment_json` is a `SegmentMeta` giving
+/// the final `path` and the **exact** stats computed from that file; `rows`
+/// must equal the fragments' rows (a seal never loses or gains rows). The
+/// segment becomes sealed (`sealed_at = now_micros`); fragment files move to
+/// `pending_deletes`, except a fragment whose path is reused as the output
+/// path — the single-fragment fast path that adopts the file without a
+/// rewrite. `write_stats` counts the sealed output (and the rewrite bytes,
+/// unless adopted). Rejects legacy open segments; migrate them first.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_seal_open(
+    manifest_json: *const c_char,
+    output_segment_json: *const c_char,
+    now_micros: i64,
+    out_manifest_json: *mut *mut c_char,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            let mut m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            let output: SegmentMeta =
+                serde_json::from_str(input(output_segment_json, "output_segment_json")?)
+                    .map_err(|e| format!("output_segment: {e}"))?;
+            m.seal_open(output.id, &output, now_micros)?;
+            write_string(out_manifest_json, serde_json::to_string(&m).unwrap())
+        },
+        out_err,
+    )
+}
+
+/// Drop pending deletes whose 5-minute grace has elapsed (fragments plan §3.7):
+/// writes the swept manifest to `out_manifest_json` and the now-deletable
+/// store-relative paths as a JSON array to `out_paths_json`. The shell
+/// persists the manifest first, then deletes the files (an in-flight scan
+/// bound to the old manifest has had its grace period).
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_sweep_due(
+    manifest_json: *const c_char,
+    now_micros: i64,
+    out_manifest_json: *mut *mut c_char,
+    out_paths_json: *mut *mut c_char,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            let mut m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            let due = m.take_due_deletes(now_micros);
+            write_string(out_manifest_json, serde_json::to_string(&m).unwrap())?;
+            write_string(
+                out_paths_json,
+                serde_json::to_string(&due).map_err(|e| e.to_string())?,
+            )
+        },
+        out_err,
+    )
+}
+
+/// Does the manifest hold a legacy (pre-fragment) open segment — unsealed, no
+/// fragments, data at `path` (fragments plan §3.8)? Writes 0/1 to `out_legacy`.
+/// Such a segment must be migrated with `capped_manifest_seal_legacy_open`
+/// before fragments are added or `capped_manifest_seal_open` is used.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_is_legacy_open(
+    manifest_json: *const c_char,
+    out_legacy: *mut c_int,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            if out_legacy.is_null() {
+                return Err("out_legacy is null".to_string());
+            }
+            let m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            *out_legacy = i32::from(m.is_legacy_open());
+            Ok(())
+        },
+        out_err,
+    )
+}
+
+/// Migrate a legacy open segment in place (fragments plan §3.8): it is already
+/// a complete Parquet file at its `path`, so sealing just flips `sealed` and
+/// sets `sealed_at = now_micros` — no rewrite, no new name, nothing counted
+/// in `write_stats`. The next insert starts a fresh fragment-based open
+/// segment. Errors unless the open segment is exactly the legacy shape.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_seal_legacy_open(
+    manifest_json: *const c_char,
+    now_micros: i64,
+    out_manifest_json: *mut *mut c_char,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            let mut m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            m.seal_legacy_open(now_micros)?;
+            write_string(out_manifest_json, serde_json::to_string(&m).unwrap())
+        },
+        out_err,
+    )
+}
+
+/// Every store-relative path the manifest references, as a JSON array — the
+/// ATTACH-time orphan GC (fragments plan §3.7) must never delete a file named
+/// here: sealed segment files, fragment files of the open segment, the data
+/// file of a legacy open segment, recorded index sidecars, and pending
+/// deletes. The *planned* sealed path of a fragment-based open segment is
+/// deliberately excluded: it names no existing file, and the crash matrix
+/// (§4) requires the GC to be able to remove a stray seal output there while
+/// the segment is still open.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_owned_paths(
+    manifest_json: *const c_char,
+    out_paths_json: *mut *mut c_char,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            let m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            let mut paths: Vec<&str> = Vec::new();
+            for s in &m.segments {
+                // An open segment's `path` is planned, not real — unless the
+                // segment is sealed or legacy (its data lives at `path`).
+                if (s.sealed || s.is_legacy_open()) && !s.path.is_empty() {
+                    paths.push(s.path.as_str());
+                }
+                paths.extend(s.fragments.iter().map(|f| f.path.as_str()));
+                if let Some(idx) = &s.index_file {
+                    paths.push(idx.as_str());
+                }
+            }
+            paths.extend(m.pending_deletes.iter().map(|d| d.path.as_str()));
+            write_string(
+                out_paths_json,
+                serde_json::to_string(&paths).map_err(|e| e.to_string())?,
+            )
+        },
+        out_err,
+    )
+}
+
+/// The pending-delete grace period in microseconds (fragments plan §3.2:
+/// DELETE_GRACE, 5 minutes). The shell uses it as the minimum age for orphan
+/// GC candidates and to translate the test-only grace override into the
+/// `now_micros` it passes to the queueing calls (which schedule
+/// `not_before = now_micros + DELETE_GRACE` internally).
+///
+/// # Safety
+///
+/// `out_micros` must be null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_delete_grace_micros(out_micros: *mut i64, out_err: *mut *mut c_char) -> c_int {
+    guard(
+        || {
+            if out_micros.is_null() {
+                return Err("out_micros is null".to_string());
+            }
+            *out_micros = crate::manifest::DELETE_GRACE;
+            Ok(())
         },
         out_err,
     )
@@ -691,6 +1075,72 @@ pub unsafe extern "C" fn capped_should_seal_default(
                 Some(open) => i32::from(should_seal(open, &SealLimits::default_telemetry())),
                 None => 0,
             };
+            Ok(())
+        },
+        out_err,
+    )
+}
+
+/// Does the open segment hold at least [`MAX_OPEN_FRAGMENTS`] fragment files
+/// (fragments plan §5 T6)? Writes 0/1 to `out_seal`. The size/row/span seals
+/// bound nothing for a table without a time column and tiny commits, so the
+/// shell seals on this too — after the compaction loop, alongside
+/// [`capped_should_seal_default`]. No open segment => 0.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_needs_fragment_seal(
+    manifest_json: *const c_char,
+    out_seal: *mut c_int,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            if out_seal.is_null() {
+                return Err("out_seal is null".to_string());
+            }
+            let m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            *out_seal = match m.open_segment() {
+                Some(open) => i32::from(open.fragments.len() >= MAX_OPEN_FRAGMENTS),
+                None => 0,
+            };
+            Ok(())
+        },
+        out_err,
+    )
+}
+
+/// Table-level accounting for `capped_tables` (fragments plan §3.9): writes the
+/// manifest's `write_stats.bytes_written` (every Parquet byte capped wrote:
+/// fragments, compaction merges, seal rewrites; an adopted seal output is not
+/// counted twice) to `out_bytes_written`, and the number of files currently
+/// waiting in `pending_deletes` (fragments plan §3.7) to
+/// `out_pending_delete_files`.
+///
+/// # Safety
+///
+/// Pointers must be null or valid NUL-terminated UTF-8 strings; out pointers
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn capped_manifest_stats(
+    manifest_json: *const c_char,
+    out_bytes_written: *mut i64,
+    out_pending_delete_files: *mut i64,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    guard(
+        || {
+            if out_bytes_written.is_null() || out_pending_delete_files.is_null() {
+                return Err("out_bytes_written or out_pending_delete_files is null".to_string());
+            }
+            let m: Manifest = serde_json::from_str(input(manifest_json, "manifest_json")?)
+                .map_err(|e| format!("manifest: {e}"))?;
+            *out_bytes_written = m.write_stats.bytes_written as i64;
+            *out_pending_delete_files = m.pending_deletes.len() as i64;
             Ok(())
         },
         out_err,
@@ -1242,6 +1692,694 @@ mod tests {
         assert_eq!(v["next_segment_id"], 1);
     }
 
+    // ---- fragment ABI (fragments plan T3) -----------------------------------
+
+    /// Manifest with one fresh (fragment-based) open segment id 1.
+    fn open_fragment_manifest() -> CString {
+        let mut m = Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime)
+                .max_rows(500)
+                .build()
+                .unwrap(),
+        );
+        m.put_segment(SegmentMeta {
+            id: SegmentId(1),
+            path: "t/1.seg.parquet".into(),
+            rows: 0,
+            bytes: 0,
+            min_ts: None,
+            max_ts: None,
+            sealed: false,
+            sealed_at: None,
+            index_file: None,
+            fragments: Vec::new(),
+            next_fragment_seq: 0,
+        })
+        .unwrap();
+        CString::new(serde_json::to_string(&m).unwrap()).unwrap()
+    }
+
+    fn frag_json(seg: u64, seq: u64, tier: u8, rows: u64, bytes: u64) -> CString {
+        CString::new(format!(
+            r#"{{"seq":{seq},"path":"t/{seg}.frag-{seq:06}.parquet","rows":{rows},"bytes":{bytes},"min_ts":null,"max_ts":null,"tier":{tier}}}"#
+        ))
+        .unwrap()
+    }
+
+    /// Add `n` tier-0 fragments (1 row, 10 bytes each) to open segment 1.
+    fn add_fragments(m: CString, n: u64) -> CString {
+        let mut m = m;
+        for i in 0..n {
+            let next = unsafe {
+                call_str(|o, e| capped_manifest_add_fragment(m.as_ptr(), 1, frag_json(1, i, 0, 1, 10).as_ptr(), o, e))
+            }
+            .unwrap();
+            m = CString::new(next).unwrap();
+        }
+        m
+    }
+
+    #[test]
+    fn add_fragment_via_ffi() {
+        let m = open_fragment_manifest();
+        let frag = CString::new(
+            r#"{"seq":0,"path":"t/1.frag-000000.parquet","rows":3,"bytes":120,"min_ts":10,"max_ts":20,"tier":0}"#,
+        )
+        .unwrap();
+        let m1 =
+            unsafe { call_str(|o, e| capped_manifest_add_fragment(m.as_ptr(), 1, frag.as_ptr(), o, e)) }
+                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&m1).unwrap();
+        let open = &v["segments"][0];
+        assert_eq!(open["rows"], 3);
+        assert_eq!(open["bytes"], 120);
+        assert_eq!(open["min_ts"], 10);
+        assert_eq!(open["fragments"].as_array().unwrap().len(), 1);
+        assert_eq!(open["next_fragment_seq"], 1);
+        assert_eq!(v["write_stats"]["bytes_written"], 120);
+        assert_eq!(v["write_stats"]["files_written"], 1);
+        // A reused seq is rejected, and so is a negative segment id.
+        let m1c = CString::new(m1).unwrap();
+        let err = unsafe {
+            call_str(|o, e| capped_manifest_add_fragment(m1c.as_ptr(), 1, frag.as_ptr(), o, e))
+        }
+        .unwrap_err();
+        assert!(err.contains("already used"), "got: {err}");
+        let err = unsafe {
+            call_str(|o, e| capped_manifest_add_fragment(m.as_ptr(), -1, frag.as_ptr(), o, e))
+        }
+        .unwrap_err();
+        assert!(err.contains("segment_id"), "got: {err}");
+        // A skipped seq is accepted: the shell burns seqs whose paths are
+        // already occupied on disk (T9 fix), and add_fragment keeps the
+        // invariant by accepting any seq >= next_fragment_seq, bumping it.
+        let far = CString::new(
+            r#"{"seq":5,"path":"t/1.frag-000005.parquet","rows":1,"bytes":40,"min_ts":null,"max_ts":null,"tier":0}"#,
+        )
+        .unwrap();
+        let m5 =
+            unsafe { call_str(|o, e| capped_manifest_add_fragment(m1c.as_ptr(), 1, far.as_ptr(), o, e)) }.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&m5).unwrap();
+        assert_eq!(v["segments"][0]["next_fragment_seq"], 6);
+    }
+
+    #[test]
+    fn plan_compaction_via_ffi() {
+        // Below the fan-in (here: nothing at all): JSON null.
+        let m = open_fragment_manifest();
+        assert_eq!(unsafe { call_str(|o, e| capped_plan_compaction(m.as_ptr(), o, e)) }.unwrap(), "null");
+        // Exactly K tier-0 fragments: merge the whole run into tier 1.
+        let m = add_fragments(open_fragment_manifest(), 8);
+        let plan = unsafe { call_str(|o, e| capped_plan_compaction(m.as_ptr(), o, e)) }.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&plan).unwrap();
+        assert_eq!(v["segment"], 1);
+        assert_eq!(v["inputs"], serde_json::json!([0, 1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(v["output_tier"], 1);
+        // Garbage in, error out.
+        let junk = CString::new("{").unwrap();
+        assert!(unsafe { call_str(|o, e| capped_plan_compaction(junk.as_ptr(), o, e)) }.is_err());
+    }
+
+    #[test]
+    fn next_fragment_seq_via_ffi() {
+        // fresh open segment: seqs start at 0
+        let probe = |m: &CString| -> i64 {
+            unsafe {
+                let mut out: i64 = -1;
+                let mut err: *mut c_char = std::ptr::null_mut();
+                assert_eq!(capped_manifest_next_fragment_seq(m.as_ptr(), &mut out, &mut err), CAPPED_OK);
+                out
+            }
+        };
+        assert_eq!(probe(&open_fragment_manifest()), 0);
+        // after 3 commits the next seq is 3
+        let m = add_fragments(open_fragment_manifest(), 3);
+        assert_eq!(probe(&m), 3);
+        // a merged output consumes a seq too
+        let plan = CString::new(r#"{"segment":1,"inputs":[0,1],"output_tier":1,"input_paths":["t/1.frag-000000.parquet","t/1.frag-000001.parquet"]}"#).unwrap();
+        let out_frag = CString::new(
+            r#"{"seq":3,"path":"t/1.frag-000003.parquet","rows":2,"bytes":18,"min_ts":null,"max_ts":null,"tier":1}"#,
+        )
+        .unwrap();
+        let m = CString::new(
+            unsafe {
+                call_str(|o, e| capped_manifest_apply_compaction(m.as_ptr(), plan.as_ptr(), out_frag.as_ptr(), 0, o, e))
+            }
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(probe(&m), 4);
+        // no open segment => error
+        let mut sealed_only = Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime).max_rows(500).build().unwrap(),
+        );
+        sealed_only
+            .put_segment(SegmentMeta {
+                id: SegmentId(0),
+                path: "t/0.seg.parquet".into(),
+                rows: 1,
+                bytes: 10,
+                min_ts: None,
+                max_ts: None,
+                sealed: true,
+                sealed_at: Some(1),
+                index_file: None,
+                fragments: Vec::new(),
+                next_fragment_seq: 0,
+            })
+            .unwrap();
+        let sealed_only = CString::new(serde_json::to_string(&sealed_only).unwrap()).unwrap();
+        let mut err: *mut c_char = std::ptr::null_mut();
+        let mut out: i64 = 0;
+        assert_eq!(
+            unsafe { capped_manifest_next_fragment_seq(sealed_only.as_ptr(), &mut out, &mut err) },
+            CAPPED_ERR
+        );
+        assert!(!err.is_null());
+        let msg = unsafe { CStr::from_ptr(err).to_str().unwrap().to_string() };
+        assert!(msg.contains("no open segment"), "got: {msg}");
+        unsafe { capped_free_string(err) };
+    }
+
+    #[test]
+    fn plan_compaction_reports_input_paths() {
+        let m = add_fragments(open_fragment_manifest(), 8);
+        let plan = unsafe { call_str(|o, e| capped_plan_compaction(m.as_ptr(), o, e)) }.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&plan).unwrap();
+        let want: Vec<String> =
+            (0..8).map(|i| format!("t/1.frag-{i:06}.parquet")).collect();
+        assert_eq!(v["input_paths"], serde_json::json!(want));
+        // the enriched plan is still accepted by apply_compaction (it ignores
+        // the added field): merging the run leaves just the output
+        let plan_c = CString::new(plan).unwrap();
+        let out_frag = CString::new(
+            r#"{"seq":8,"path":"t/1.frag-000008.parquet","rows":8,"bytes":70,"min_ts":null,"max_ts":null,"tier":1}"#,
+        )
+        .unwrap();
+        let m2 = unsafe {
+            call_str(|o, e| capped_manifest_apply_compaction(m.as_ptr(), plan_c.as_ptr(), out_frag.as_ptr(), 0, o, e))
+        }
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&m2).unwrap();
+        assert_eq!(v["segments"][0]["fragments"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn needs_fragment_seal_via_ffi() {
+        let cap = crate::compaction::MAX_OPEN_FRAGMENTS;
+        let probe = |m: &CString| -> c_int {
+            unsafe {
+                let mut out: c_int = -1;
+                let mut err: *mut c_char = std::ptr::null_mut();
+                assert_eq!(capped_manifest_needs_fragment_seal(m.as_ptr(), &mut out, &mut err), CAPPED_OK);
+                out
+            }
+        };
+        // no open segment => 0
+        let mut sealed_only = Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime).max_rows(500).build().unwrap(),
+        );
+        sealed_only
+            .put_segment(SegmentMeta {
+                id: SegmentId(0),
+                path: "t/0.seg.parquet".into(),
+                rows: 1,
+                bytes: 10,
+                min_ts: None,
+                max_ts: None,
+                sealed: true,
+                sealed_at: Some(1),
+                index_file: None,
+                fragments: Vec::new(),
+                next_fragment_seq: 0,
+            })
+            .unwrap();
+        assert_eq!(probe(&CString::new(serde_json::to_string(&sealed_only).unwrap()).unwrap()), 0);
+        // just under the cap => 0; at and above it => 1
+        let add_run = |mut m: CString, from: u64, n: u64| -> CString {
+            for seq in from..from + n {
+                let next = unsafe {
+                    call_str(|o, e| {
+                        capped_manifest_add_fragment(m.as_ptr(), 1, frag_json(1, seq, 0, 1, 10).as_ptr(), o, e)
+                    })
+                }
+                .unwrap();
+                m = CString::new(next).unwrap();
+            }
+            m
+        };
+        let m = add_run(open_fragment_manifest(), 0, (cap - 1) as u64);
+        assert_eq!(probe(&m), 0);
+        let m = add_run(m, (cap - 1) as u64, 1);
+        assert_eq!(probe(&m), 1);
+        let m = add_run(m, cap as u64, 5);
+        assert_eq!(probe(&m), 1);
+    }
+
+    #[test]
+    fn apply_compaction_via_ffi() {
+        let m = add_fragments(open_fragment_manifest(), 8);
+        let plan = CString::new(r#"{"segment":1,"inputs":[0,1,2,3,4,5,6,7],"output_tier":1}"#).unwrap();
+        let out_frag = CString::new(
+            r#"{"seq":8,"path":"t/1.frag-000008.parquet","rows":8,"bytes":70,"min_ts":null,"max_ts":null,"tier":1}"#,
+        )
+        .unwrap();
+        let m2 = unsafe {
+            call_str(|o, e| capped_manifest_apply_compaction(m.as_ptr(), plan.as_ptr(), out_frag.as_ptr(), 1_000, o, e))
+        }
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&m2).unwrap();
+        let frags = v["segments"][0]["fragments"].as_array().unwrap();
+        assert_eq!(frags.len(), 1); // the run replaced by the output, in place
+        assert_eq!(frags[0]["seq"], 8);
+        assert_eq!(frags[0]["tier"], 1);
+        let pend = v["pending_deletes"].as_array().unwrap();
+        assert_eq!(pend.len(), 8);
+        assert_eq!(pend[0]["path"], "t/1.frag-000000.parquet");
+        assert_eq!(pend[0]["not_before"], 1_000 + crate::manifest::DELETE_GRACE);
+        assert_eq!(v["write_stats"]["bytes_written"], 8 * 10 + 70);
+        assert_eq!(v["write_stats"]["files_written"], 9);
+        // A non-contiguous plan is rejected.
+        let bad = CString::new(r#"{"segment":1,"inputs":[0,2],"output_tier":1}"#).unwrap();
+        let m2c = CString::new(m2).unwrap();
+        let err = unsafe {
+            call_str(|o, e| capped_manifest_apply_compaction(m2c.as_ptr(), bad.as_ptr(), out_frag.as_ptr(), 1_000, o, e))
+        }
+        .unwrap_err();
+        assert!(err.contains("contiguous"), "got: {err}");
+    }
+
+    #[test]
+    fn seal_open_via_ffi() {
+        let m = add_fragments(open_fragment_manifest(), 3); // rows 3, bytes 300
+        let out_seg = CString::new(
+            r#"{"id":1,"path":"t/1.seg.parquet","rows":3,"bytes":250,"min_ts":null,"max_ts":null,"sealed":true,"sealed_at":null,"index_file":null}"#,
+        )
+        .unwrap();
+        let m1 = unsafe {
+            call_str(|o, e| capped_manifest_seal_open(m.as_ptr(), out_seg.as_ptr(), 500, o, e))
+        }
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&m1).unwrap();
+        let seg = &v["segments"][0];
+        assert_eq!(seg["sealed"], true);
+        assert_eq!(seg["sealed_at"], 500);
+        assert_eq!(seg["bytes"], 250);
+        assert!(seg["fragments"].is_null(), "fragments cleared: {seg}");
+        assert_eq!(v["pending_deletes"].as_array().unwrap().len(), 3);
+        assert_eq!(v["write_stats"]["bytes_written"], 3 * 10 + 250); // frags + rewrite
+        assert_eq!(v["write_stats"]["bytes_sealed"], 250);
+        // A seal that would drop rows is rejected.
+        let lost = CString::new(
+            r#"{"id":1,"path":"t/1.seg.parquet","rows":2,"bytes":250,"min_ts":null,"max_ts":null,"sealed":true,"sealed_at":null,"index_file":null}"#,
+        )
+        .unwrap();
+        let err = unsafe {
+            call_str(|o, e| capped_manifest_seal_open(m.as_ptr(), lost.as_ptr(), 500, o, e))
+        }
+        .unwrap_err();
+        assert!(err.contains("rows"), "got: {err}");
+    }
+
+    #[test]
+    fn sweep_due_via_ffi() {
+        // Queue three files via a seal at now=0 (not_before = DELETE_GRACE).
+        let m = add_fragments(open_fragment_manifest(), 3);
+        let out_seg = CString::new(
+            r#"{"id":1,"path":"t/1.seg.parquet","rows":3,"bytes":250,"min_ts":null,"max_ts":null,"sealed":true,"sealed_at":null,"index_file":null}"#,
+        )
+        .unwrap();
+        let m1 = CString::new(
+            unsafe { call_str(|o, e| capped_manifest_seal_open(m.as_ptr(), out_seg.as_ptr(), 0, o, e)) }.unwrap(),
+        )
+        .unwrap();
+        // Before the grace period: nothing due, manifest untouched.
+        let sweep = |m: &CString, now: i64| -> (String, String) {
+            unsafe {
+                let mut out_m: *mut c_char = std::ptr::null_mut();
+                let mut out_p: *mut c_char = std::ptr::null_mut();
+                let mut err: *mut c_char = std::ptr::null_mut();
+                assert_eq!(
+                    capped_manifest_sweep_due(m.as_ptr(), now, &mut out_m, &mut out_p, &mut err),
+                    CAPPED_OK
+                );
+                let m = CStr::from_ptr(out_m).to_str().unwrap().to_string();
+                let p = CStr::from_ptr(out_p).to_str().unwrap().to_string();
+                capped_free_string(out_m);
+                capped_free_string(out_p);
+                (m, p)
+            }
+        };
+        let (m2, paths) = sweep(&m1, crate::manifest::DELETE_GRACE - 1);
+        assert_eq!(paths, "[]");
+        let v: serde_json::Value = serde_json::from_str(&m2).unwrap();
+        assert_eq!(v["pending_deletes"].as_array().unwrap().len(), 3);
+        // After the grace period: all three come back, manifest is swept.
+        let (m3, paths) = sweep(&CString::new(m2).unwrap(), crate::manifest::DELETE_GRACE);
+        let due: Vec<String> = serde_json::from_str(&paths).unwrap();
+        assert_eq!(due, vec![
+            "t/1.frag-000000.parquet".to_string(),
+            "t/1.frag-000001.parquet".to_string(),
+            "t/1.frag-000002.parquet".to_string(),
+        ]);
+        let v: serde_json::Value = serde_json::from_str(&m3).unwrap();
+        assert_eq!(v["pending_deletes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn is_legacy_open_via_ffi() {
+        let probe = |m: &CString| -> c_int {
+            unsafe {
+                let mut out: c_int = -1;
+                let mut err: *mut c_char = std::ptr::null_mut();
+                assert_eq!(capped_manifest_is_legacy_open(m.as_ptr(), &mut out, &mut err), CAPPED_OK);
+                out
+            }
+        };
+        // fragment-based open => not legacy
+        let m = open_fragment_manifest();
+        assert_eq!(probe(&m), 0);
+        // legacy open: unsealed, no fragments, rows > 0
+        let mut legacy = Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime).max_rows(500).build().unwrap(),
+        );
+        legacy
+            .put_segment(SegmentMeta {
+                id: SegmentId(1),
+                path: "t/1.seg.parquet".into(),
+                rows: 10,
+                bytes: 1_000,
+                min_ts: None,
+                max_ts: None,
+                sealed: false,
+                sealed_at: None,
+                index_file: None,
+                fragments: Vec::new(),
+                next_fragment_seq: 0,
+            })
+            .unwrap();
+        let legacy = CString::new(serde_json::to_string(&legacy).unwrap()).unwrap();
+        assert_eq!(probe(&legacy), 1);
+        // after fragments arrive, it is no longer the legacy shape
+        let m = add_fragments(open_fragment_manifest(), 1);
+        assert_eq!(probe(&m), 0);
+        // no open segment at all
+        let mut sealed_only = Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime).max_rows(500).build().unwrap(),
+        );
+        sealed_only
+            .put_segment(SegmentMeta {
+                id: SegmentId(0),
+                path: "t/0.seg.parquet".into(),
+                rows: 1,
+                bytes: 10,
+                min_ts: None,
+                max_ts: None,
+                sealed: true,
+                sealed_at: Some(1),
+                index_file: None,
+                fragments: Vec::new(),
+                next_fragment_seq: 0,
+            })
+            .unwrap();
+        let sealed_only = CString::new(serde_json::to_string(&sealed_only).unwrap()).unwrap();
+        assert_eq!(probe(&sealed_only), 0);
+    }
+
+    #[test]
+    fn seal_legacy_open_via_ffi() {
+        let mut legacy = Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime).max_rows(500).build().unwrap(),
+        );
+        legacy
+            .put_segment(SegmentMeta {
+                id: SegmentId(4),
+                path: "t/4.seg.parquet".into(),
+                rows: 10,
+                bytes: 1_000,
+                min_ts: Some(5),
+                max_ts: Some(9),
+                sealed: false,
+                sealed_at: None,
+                index_file: None,
+                fragments: Vec::new(),
+                next_fragment_seq: 0,
+            })
+            .unwrap();
+        let m = CString::new(serde_json::to_string(&legacy).unwrap()).unwrap();
+        let m1 =
+            unsafe { call_str(|o, e| capped_manifest_seal_legacy_open(m.as_ptr(), 999, o, e)) }.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&m1).unwrap();
+        let seg = &v["segments"][0];
+        assert_eq!(seg["sealed"], true);
+        assert_eq!(seg["sealed_at"], 999);
+        assert_eq!(seg["path"], "t/4.seg.parquet"); // no rewrite, same file
+        assert_eq!(seg["rows"], 10);
+        assert_eq!(seg["bytes"], 1_000);
+        assert_eq!(v["write_stats"]["bytes_written"], 0); // migration writes nothing
+        // A fragment-based open segment must go through seal_open instead.
+        let fresh = open_fragment_manifest();
+        let err = unsafe {
+            call_str(|o, e| capped_manifest_seal_legacy_open(fresh.as_ptr(), 999, o, e))
+        }
+        .unwrap_err();
+        assert!(err.contains("legacy"), "got: {err}");
+    }
+
+    #[test]
+    fn owned_paths_via_ffi() {
+        let mut m = Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime).max_rows(500).build().unwrap(),
+        );
+        // sealed segment with an index sidecar
+        m.put_segment(SegmentMeta {
+            id: SegmentId(0),
+            path: "t/0.seg.parquet".into(),
+            rows: 1,
+            bytes: 10,
+            min_ts: None,
+            max_ts: None,
+            sealed: true,
+            sealed_at: Some(1),
+            index_file: Some("t/0.seg.idx.duckdb".into()),
+            fragments: Vec::new(),
+            next_fragment_seq: 0,
+        })
+        .unwrap();
+        // open segment with fragments; merge 2 of 3 so two go pending
+        m.put_segment(SegmentMeta {
+            id: SegmentId(1),
+            path: "t/1.seg.parquet".into(), // planned: must NOT be owned
+            rows: 0,
+            bytes: 0,
+            min_ts: None,
+            max_ts: None,
+            sealed: false,
+            sealed_at: None,
+            index_file: None,
+            fragments: Vec::new(),
+            next_fragment_seq: 0,
+        })
+        .unwrap();
+        let m = CString::new(serde_json::to_string(&m).unwrap()).unwrap();
+        let m = add_fragments(m, 3);
+        let plan = CString::new(r#"{"segment":1,"inputs":[0,1],"output_tier":1}"#).unwrap();
+        let out_frag = CString::new(
+            r#"{"seq":3,"path":"t/1.frag-000003.parquet","rows":2,"bytes":18,"min_ts":null,"max_ts":null,"tier":1}"#,
+        )
+        .unwrap();
+        let m = CString::new(
+            unsafe {
+                call_str(|o, e| capped_manifest_apply_compaction(m.as_ptr(), plan.as_ptr(), out_frag.as_ptr(), 0, o, e))
+            }
+            .unwrap(),
+        )
+        .unwrap();
+        let paths =
+            unsafe { call_str(|o, e| capped_manifest_owned_paths(m.as_ptr(), o, e)) }.unwrap();
+        let owned: Vec<String> = serde_json::from_str(&paths).unwrap();
+        assert_eq!(
+            owned,
+            vec![
+                "t/0.seg.parquet".to_string(),       // sealed data
+                "t/0.seg.idx.duckdb".to_string(),    // its sidecar
+                "t/1.frag-000003.parquet".to_string(), // merge output, at the run's position
+                "t/1.frag-000002.parquet".to_string(), // the surviving fragment
+                "t/1.frag-000000.parquet".to_string(), // pending input
+                "t/1.frag-000001.parquet".to_string(), // pending input
+            ]
+        );
+        assert!(!owned.contains(&"t/1.seg.parquet".to_string()), "planned path must stay out of owned");
+        // A legacy open segment's path is real data and IS owned.
+        let mut legacy = Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime).max_rows(500).build().unwrap(),
+        );
+        legacy
+            .put_segment(SegmentMeta {
+                id: SegmentId(2),
+                path: "t/2.seg.parquet".into(),
+                rows: 5,
+                bytes: 100,
+                min_ts: None,
+                max_ts: None,
+                sealed: false,
+                sealed_at: None,
+                index_file: None,
+                fragments: Vec::new(),
+                next_fragment_seq: 0,
+            })
+            .unwrap();
+        let legacy = CString::new(serde_json::to_string(&legacy).unwrap()).unwrap();
+        let paths =
+            unsafe { call_str(|o, e| capped_manifest_owned_paths(legacy.as_ptr(), o, e)) }.unwrap();
+        assert_eq!(paths, r#"["t/2.seg.parquet"]"#);
+    }
+
+    #[test]
+    fn manifest_stats_via_ffi() {
+        let stats = |m: &CString| -> (i64, i64) {
+            let mut bytes_written = -1;
+            let mut pending = -1;
+            let mut err: *mut c_char = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    capped_manifest_stats(m.as_ptr(), &mut bytes_written, &mut pending, &mut err)
+                },
+                CAPPED_OK
+            );
+            (bytes_written, pending)
+        };
+        // A fresh manifest wrote nothing and queues nothing.
+        let m = open_fragment_manifest();
+        assert_eq!(stats(&m), (0, 0));
+        // Fragments count into bytes_written; nothing is pending yet.
+        let m = add_fragments(m, 8);
+        assert_eq!(stats(&m), (80, 0));
+        // A merge adds its output to bytes_written and queues its 8 inputs.
+        let plan = CString::new(r#"{"segment":1,"inputs":[0,1,2,3,4,5,6,7],"output_tier":1}"#).unwrap();
+        let out_frag = CString::new(
+            r#"{"seq":8,"path":"t/1.frag-000008.parquet","rows":8,"bytes":70,"min_ts":null,"max_ts":null,"tier":1}"#,
+        )
+        .unwrap();
+        let m2 = CString::new(
+            unsafe {
+                call_str(|o, e| {
+                    capped_manifest_apply_compaction(m.as_ptr(), plan.as_ptr(), out_frag.as_ptr(), 1_000, o, e)
+                })
+            }
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stats(&m2), (8 * 10 + 70, 8));
+        // A null out pointer is an error, not UB.
+        let mut pending = 0;
+        let mut err: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                capped_manifest_stats(m2.as_ptr(), std::ptr::null_mut(), &mut pending, &mut err)
+            },
+            CAPPED_ERR
+        );
+        if !err.is_null() {
+            unsafe { capped_free_string(err) };
+        }
+    }
+
+    #[test]
+    fn delete_grace_via_ffi() {
+        unsafe {
+            let mut out: i64 = -1;
+            let mut err: *mut c_char = std::ptr::null_mut();
+            assert_eq!(capped_delete_grace_micros(&mut out, &mut err), CAPPED_OK);
+            assert_eq!(out, crate::manifest::DELETE_GRACE);
+            assert_eq!(out, 5 * 60 * 1_000_000);
+            assert_eq!(capped_delete_grace_micros(std::ptr::null_mut(), &mut err), CAPPED_ERR);
+            if !err.is_null() {
+                capped_free_string(err);
+            }
+        }
+    }
+
+    #[test]
+    fn list_segments_reports_files_and_fragments() {
+        // fragment-based open: files are the fragment paths, in order
+        let m = add_fragments(open_fragment_manifest(), 2);
+        let list = unsafe { call_str(|o, e| capped_manifest_list_segments(m.as_ptr(), o, e)) }.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&list).unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        let open = &v[0];
+        assert_eq!(open["path"], "t/1.seg.parquet"); // planned path unchanged
+        assert_eq!(open["files"], serde_json::json!(["t/1.frag-000000.parquet", "t/1.frag-000001.parquet"]));
+        assert_eq!(open["fragments"], 2);
+        assert_eq!(open["rows"], 2);
+        // a sealed segment reports files=[path], fragments=0
+        let mut m2 = open_segment_manifest_for_list();
+        m2.put_segment(SegmentMeta {
+            id: SegmentId(0),
+            path: "t/0.seg.parquet".into(),
+            rows: 7,
+            bytes: 70,
+            min_ts: None,
+            max_ts: None,
+            sealed: true,
+            sealed_at: Some(1),
+            index_file: None,
+            fragments: Vec::new(),
+            next_fragment_seq: 0,
+        })
+        .unwrap();
+        let m2 = CString::new(serde_json::to_string(&m2).unwrap()).unwrap();
+        let list = unsafe { call_str(|o, e| capped_manifest_list_segments(m2.as_ptr(), o, e)) }.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&list).unwrap();
+        assert_eq!(v[0]["files"], serde_json::json!(["t/0.seg.parquet"]));
+        assert_eq!(v[0]["fragments"], 0);
+        // a legacy open segment reports files=[path]
+        let mut m3 = open_segment_manifest_for_list();
+        m3.put_segment(SegmentMeta {
+            id: SegmentId(1),
+            path: "t/1.seg.parquet".into(),
+            rows: 9,
+            bytes: 90,
+            min_ts: None,
+            max_ts: None,
+            sealed: false,
+            sealed_at: None,
+            index_file: None,
+            fragments: Vec::new(),
+            next_fragment_seq: 0,
+        })
+        .unwrap();
+        let m3 = CString::new(serde_json::to_string(&m3).unwrap()).unwrap();
+        let list = unsafe { call_str(|o, e| capped_manifest_list_segments(m3.as_ptr(), o, e)) }.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&list).unwrap();
+        assert_eq!(v[0]["files"], serde_json::json!(["t/1.seg.parquet"]));
+        assert_eq!(v[0]["fragments"], 0);
+    }
+
+    fn open_segment_manifest_for_list() -> Manifest {
+        Manifest::new(
+            "t",
+            vec![Column { name: "x".into(), ty: "INTEGER".into() }],
+            RetentionPolicy::builder(TimeSource::IngestTime).max_rows(500).build().unwrap(),
+        )
+    }
+
     #[test]
     fn segments_without_time_bounds_roundtrip_and_survive_ttl() {
         // The contract the shell relies on for tables with no time_col: null
@@ -1301,6 +2439,8 @@ mod tests {
             sealed: true,
             sealed_at: Some(1),
             index_file: None,
+            fragments: Vec::new(),
+            next_fragment_seq: 0,
         })
         .unwrap();
         let mc = CString::new(serde_json::to_string(&m).unwrap()).unwrap();

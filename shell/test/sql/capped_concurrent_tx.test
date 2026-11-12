@@ -66,3 +66,152 @@ query I
 SELECT count(*) FROM cts.main.logs WHERE body = 'dropped'
 ----
 0
+
+# --- fragments under interleaved commits ------------------------------------
+# Two connections interleave single-row autocommit INSERTs on one fragment
+# table (20 each — enough to fire compaction merges on the shared open
+# segment) while conB seals it midway: nothing may be lost or duplicated.
+
+statement ok
+CREATE TABLE cts.main.mix(ts TIMESTAMPTZ, v BIGINT) WITH (time_col='ts', ttl='36500 days', max_bytes='1GB')
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 1)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 101)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 2)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 102)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 3)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 103)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 4)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 104)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 5)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 105)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 6)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 106)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 7)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 107)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 8)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 108)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 9)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 109)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 10)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 110)
+
+# seal from conB while conA keeps committing
+statement ok conB
+SELECT * FROM capped_seal('cts', 'mix')
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 11)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 111)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 12)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 112)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 13)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 113)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 14)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 114)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 15)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 115)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 16)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 116)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 17)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 117)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 18)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 118)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 19)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 119)
+
+statement ok conA
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 20)
+
+statement ok conB
+INSERT INTO cts.main.mix VALUES (TIMESTAMPTZ '2026-11-02 00:00:01+00', 120)
+
+query I
+SELECT count(*) FROM cts.main.mix
+----
+40
+
+query I
+SELECT sum(v) FROM cts.main.mix
+----
+2420
+
+query I
+SELECT ((SELECT sum(hash(v)) FROM cts.main.mix) =
+        ((SELECT sum(hash(CAST(range AS BIGINT))) FROM range(1, 21)) +
+         (SELECT sum(hash(CAST(range AS BIGINT))) FROM range(101, 121))))::INTEGER
+----
+1

@@ -127,6 +127,9 @@ string CappedSchema::PolicySpecFromOptions(CreateTableInfo &base) {
 
 optional_ptr<CatalogEntry> CappedSchema::CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) {
 	auto &base = info.Base();
+	if (catalog.Cast<CappedCatalog>().ReadOnly()) {
+		throw IOException("capped: cannot create table '%s': the store is attached READ_ONLY", base.table);
+	}
 	if (base.query) {
 		throw NotImplementedException("capped: CREATE TABLE AS SELECT into a capped table is not supported yet");
 	}
@@ -174,6 +177,9 @@ optional_ptr<CatalogEntry> CappedSchema::CreateTable(CatalogTransaction transact
 }
 
 void CappedSchema::DropEntry(ClientContext &context, DropInfo &info) {
+	if (catalog.Cast<CappedCatalog>().ReadOnly()) {
+		throw IOException("capped: cannot drop entries: the store is attached READ_ONLY");
+	}
 	if (info.type != CatalogType::TABLE_ENTRY) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 			return;

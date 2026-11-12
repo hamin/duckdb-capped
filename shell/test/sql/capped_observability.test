@@ -1,0 +1,212 @@
+# name: test/sql/capped_observability.test
+# description: observability columns from the fragments plan (§3.9):
+#              capped_status.fragments, capped_tables.bytes_written and
+#              capped_tables.pending_delete_files
+# group: [sql]
+
+require capped
+
+require parquet
+
+# No background thread (enforce_interval '0'): every sweep and seal step
+# runs exactly where a table function or INSERT puts it.
+
+statement ok
+ATTACH '__TEST_DIR__/capped_observability' AS ob (TYPE capped, enforce_interval '0')
+
+statement ok
+CREATE TABLE ob.main.e1(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO ob.main.e1 VALUES (1)
+
+statement ok
+INSERT INTO ob.main.e1 VALUES (2)
+
+statement ok
+INSERT INTO ob.main.e1 VALUES (3)
+
+statement ok
+INSERT INTO ob.main.e1 VALUES (4)
+
+statement ok
+INSERT INTO ob.main.e1 VALUES (5)
+
+statement ok
+INSERT INTO ob.main.e1 VALUES (6)
+
+statement ok
+INSERT INTO ob.main.e1 VALUES (7)
+
+statement ok
+INSERT INTO ob.main.e1 VALUES (8)
+
+# the 8 single-row commits fired the K=8 minor merge: one output file is
+# live, its 8 inputs are queued in pending_deletes under the default 5-
+# minute grace. After a merge: pending_delete_files > 0 and the cumulative
+# bytes_written (8 fragments + 1 merge output) exceed the bytes the
+# manifest references (just the merge output).
+query I
+SELECT (pending_delete_files > 0)::INTEGER FROM capped_tables('ob') WHERE table_name = 'e1'
+----
+1
+
+query I
+SELECT (bytes_written > bytes)::INTEGER FROM capped_tables('ob') WHERE table_name = 'e1'
+----
+1
+
+query I
+SELECT pending_delete_files FROM capped_tables('ob') WHERE table_name = 'e1'
+----
+8
+
+# the open segment reports its live fragment count (1: the merge output)
+# through both functions; capped_status shows the PLANNED sealed path
+query I
+SELECT fragments FROM capped_status('ob', 'e1')
+----
+1
+
+query I
+SELECT fragments FROM capped_tables('ob') WHERE table_name = 'e1'
+----
+1
+
+# the inputs are on disk until the sweep deletes them, the output is live
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_observability/e1/0.frag-00000?.parquet') WHERE file NOT LIKE '%000008%'
+----
+8
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_observability/e1/0.frag-000008.parquet')
+----
+1
+
+# ---------------------------------------------------------------------------
+# The sweep with the test knob: with capped_pending_delete_grace = '0s'
+# set BEFORE the merge, the inputs are queued at not_before = now, so the
+# flush's own sweep step (capped_enforce() runs the same pass) leaves
+# pending_delete_files = 0 and the input files gone.
+# ---------------------------------------------------------------------------
+
+statement ok
+SET capped_pending_delete_grace = '0s'
+
+statement ok
+CREATE TABLE ob.main.e2(x BIGINT) WITH (max_bytes='1GB')
+
+statement ok
+INSERT INTO ob.main.e2 VALUES (1)
+
+statement ok
+INSERT INTO ob.main.e2 VALUES (2)
+
+statement ok
+INSERT INTO ob.main.e2 VALUES (3)
+
+statement ok
+INSERT INTO ob.main.e2 VALUES (4)
+
+statement ok
+INSERT INTO ob.main.e2 VALUES (5)
+
+statement ok
+INSERT INTO ob.main.e2 VALUES (6)
+
+statement ok
+INSERT INTO ob.main.e2 VALUES (7)
+
+statement ok
+INSERT INTO ob.main.e2 VALUES (8)
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/capped_observability/e2/0.frag-00000?.parquet') WHERE file NOT LIKE '%000008%'
+----
+0
+
+statement ok
+SELECT * FROM capped_enforce('ob', 'e2')
+
+query I
+SELECT pending_delete_files FROM capped_tables('ob') WHERE table_name = 'e2'
+----
+0
+
+query II
+SELECT count(*), sum(x) FROM ob.main.e2
+----
+8	36
+
+# the override changes NEW queues only: e1's entries keep the not_before
+# they were queued with (5-minute grace) and survive sweep passes under
+# '0s' — the sweep honours stored not_before values as written.
+statement ok
+SELECT * FROM capped_enforce('ob', 'e1')
+
+query I
+SELECT pending_delete_files FROM capped_tables('ob') WHERE table_name = 'e1'
+----
+8
+
+# ---------------------------------------------------------------------------
+# A sealed segment reports fragments = 0. Both open segments hold exactly
+# one (merged) fragment, so both seals take the adoption fast path: no
+# new file written (bytes_written unchanged) and no new delete queued.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TEMP TABLE before_seals AS SELECT table_name AS t, bytes_written AS bw, pending_delete_files AS pdf FROM capped_tables('ob')
+
+statement ok
+SELECT * FROM capped_seal('ob', 'e2')
+
+query I
+SELECT fragments FROM capped_status('ob', 'e2') WHERE sealed
+----
+0
+
+query I
+SELECT fragments FROM capped_tables('ob') WHERE table_name = 'e2'
+----
+0
+
+# sealed e2 still reads; e1 keeps its pending entries through its own seal
+query II
+SELECT count(*), sum(x) FROM ob.main.e2
+----
+8	36
+
+statement ok
+SELECT * FROM capped_seal('ob', 'e1')
+
+query I
+SELECT fragments FROM capped_status('ob', 'e1') WHERE sealed
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT * FROM capped_status('ob', 'e1') WHERE NOT sealed)
+----
+0
+
+query I
+SELECT count(*) FROM capped_tables('ob') t JOIN before_seals b ON t.table_name = b.t WHERE t.bytes_written = b.bw AND t.pending_delete_files = b.pdf
+----
+2
+
+query I
+SELECT pending_delete_files FROM capped_tables('ob') WHERE table_name = 'e1'
+----
+8
+
+query II
+SELECT count(*), sum(x) FROM ob.main.e1
+----
+8	36
+
+# restore the default for anything reusing this connection
+statement ok
+SET capped_pending_delete_grace = '5min'
+
