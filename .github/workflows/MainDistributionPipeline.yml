@@ -1,30 +1,52 @@
 #
-# This workflow calls the main distribution pipeline from DuckDB to build, test and (optionally) release the extension
+# This workflow calls the main distribution pipeline from DuckDB to build and
+# test the capped extension. The repo root is the extension build directory,
+# so build_directory stays at its default ".".
+#
+# duckdb_version / ci_tools_version are pinned to match the git submodules
+# (duckdb v2.0.0, extension-ci-tools v2.0-cyanoptera) — bump all three together.
+#
+# The sqllogictests run through the workflow's Test phase: it calls
+# `make test_release` from the repo root, which the root Makefile gates on the
+# remote-extensions target that stages the official fts/vss builds the search
+# tests LOAD (test/sql/capped_search.test, capped_fragments_e2e.test). Tests
+# run natively on osx_arm64 and inside the manylinux container on linux_amd64;
+# the reusable workflow skips the test phase for linux_arm64 and osx_amd64
+# (cross-builds are build-and-upload only). ASan stays local (`make asan`).
 #
 name: Main Extension Distribution Pipeline
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   duckdb-stable-build:
-    name: Build extension binaries
+    name: Build and test extension
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
     with:
       duckdb_version: v2.0.0
       ci_tools_version: v2.0-cyanoptera
-      extension_name: waddle
-
-  code-quality-check:
-    name: Code Quality Check
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v2.0-cyanoptera
-    with:
-      duckdb_version: v2.0.0
-      ci_tools_version: v2.0-cyanoptera
-      extension_name: waddle
-      format_checks: 'format;tidy'
+      extension_name: capped
+      # CMakeLists.txt shells out to `cargo build -p capped-core`; this installs
+      # rustup in the linux docker images and makes the macos setup add the
+      # x86_64-apple-darwin cross target. (enable_rust is deprecated in favour
+      # of this input.)
+      extra_toolchains: rust
+      # Ship four platforms only: everything else in
+      # extension-ci-tools/config/distribution_matrix.json is excluded here, and
+      # osx_amd64 — an opt-in entry in that matrix — is opted into below.
+      exclude_archs: 'linux_amd64_musl;linux_arm64_musl;windows_amd64;windows_arm64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
+      opt_in_archs: osx_amd64
+      # 'auto' silently drops the non-essential archs (linux_arm64, osx_*) on
+      # pull_request events; the coverage target here is all four on every run.
+      reduced_ci_mode: disabled

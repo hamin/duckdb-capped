@@ -1,0 +1,40 @@
+#
+# Rust gate for the crates/ workspace (capped-core, the staticlib the CMake
+# build links). The C++ / sqllogictest side is covered by
+# MainDistributionPipeline.yml. No submodules are needed: cargo never touches
+# duckdb/ or extension-ci-tools/.
+#
+name: Rust
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: cargo test + clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # GitHub-hosted ubuntu/macos runners ship stable rustup + clippy
+      # preinstalled; pin via rust-toolchain.toml or dtolnay/rust-toolchain
+      # here if a specific version ever matters.
+      - name: cargo test
+        run: cargo test
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings

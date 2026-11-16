@@ -30,7 +30,22 @@ set(EXTENSION_SOURCES
 # staticlib lives in crates/capped-core/Cargo.toml.
 set(CAPPED_WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(CAPPED_CORE_TARGET_DIR ${CAPPED_WORKSPACE_DIR}/target/capi)
-set(CAPPED_CORE_LIB ${CAPPED_CORE_TARGET_DIR}/release/libcapped_core.a)
+
+# The CI osx_amd64 job cross-compiles on arm64 runners: DuckDB passes
+# -DOSX_BUILD_ARCH=x86_64 and targets clang at x86_64, but cargo builds the
+# host arch unless told, and linking an arm64 staticlib into a x86_64 dylib
+# fails. ci-tools' macOS setup runs `rustup target add x86_64-apple-darwin`
+# (extra_toolchains: rust) exactly for this cross-build.
+if("${OSX_BUILD_ARCH}" STREQUAL "x86_64" OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64" OR "$ENV{OSX_BUILD_ARCH}" STREQUAL "x86_64")
+  set(CAPPED_RUST_TARGET x86_64-apple-darwin)
+  set(CAPPED_RUST_TARGET_ARGS --target ${CAPPED_RUST_TARGET})
+  set(CAPPED_CORE_PROFILE_DIR ${CAPPED_CORE_TARGET_DIR}/${CAPPED_RUST_TARGET}/release)
+else()
+  # Empty *list*, not an empty string: VERBATIM would pass "" as an argv to cargo.
+  set(CAPPED_RUST_TARGET_ARGS)
+  set(CAPPED_CORE_PROFILE_DIR ${CAPPED_CORE_TARGET_DIR}/release)
+endif()
+set(CAPPED_CORE_LIB ${CAPPED_CORE_PROFILE_DIR}/libcapped_core.a)
 
 # CONFIGURE_DEPENDS re-globs at build time so new .rs files are picked up
 file(GLOB_RECURSE CAPPED_CORE_SOURCES CONFIGURE_DEPENDS
@@ -38,7 +53,7 @@ file(GLOB_RECURSE CAPPED_CORE_SOURCES CONFIGURE_DEPENDS
 
 add_custom_command(
   OUTPUT ${CAPPED_CORE_LIB}
-  COMMAND cargo build -p capped-core --release --target-dir ${CAPPED_CORE_TARGET_DIR}
+  COMMAND cargo build -p capped-core --release ${CAPPED_RUST_TARGET_ARGS} --target-dir ${CAPPED_CORE_TARGET_DIR}
   DEPENDS ${CAPPED_CORE_SOURCES}
           ${CAPPED_WORKSPACE_DIR}/crates/capped-core/Cargo.toml
           ${CAPPED_WORKSPACE_DIR}/Cargo.lock
