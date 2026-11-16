@@ -1,5 +1,10 @@
 # DuckDB 2.0 port survey (Job C, task C1)
 
+Path note (E1b, 2026-11-16): the extension template now lives at the repository
+root; `shell/` was removed. Operational path references below have been updated
+to the new layout; remaining `shell/...` paths are historical records of the
+pre-move layout (the survey and the port itself were done while it existed).
+
 Survey date: 2026-11-12. Read-only survey: nothing under `capped/` or `lotel/` was changed
 except this file. The trial build ran from a scratch copy (`$TMP/opencode/c1-survey/capped-2.0`).
 
@@ -352,8 +357,8 @@ through main + the ci-tools tag):
 - `extension_config.cmake`: unchanged pattern; capped's extra
   `duckdb_extension_load(parquet)` built fine against 2.0.
 - Submodules are the only real CI/version change:
-  - `shell/duckdb`: `v1.5.6` (`069cc9f9`) → **tag `v2.0.0`** (`d54cbbe3df`);
-  - `shell/extension-ci-tools`: `5dd9e7c` (1.5-era grafted commit) → **branch
+  - `duckdb`: `v1.5.6` (`069cc9f9`) → **tag `v2.0.0`** (`d54cbbe3df`);
+  - `extension-ci-tools`: `5dd9e7c` (1.5-era grafted commit) → **branch
     `v2.0-cyanoptera`** (`c286b12`) — **corrected in C2: `v2.0-cyanoptera` is a branch,
     not a tag** (`git ls-remote` shows no such tag; `git fetch --tags` doesn't see it).
     Reproduce with `git fetch --depth 1 origin v2.0-cyanoptera && git checkout -B
@@ -428,13 +433,13 @@ Status after C2 (2026-11-12): ✅ done, ⚠️ done with a correction noted, det
 **Verdict: port complete.** Full build clean, `make test` 7/7 files green, `make asan`
 7/7 green (2119 assertions; one macOS ASAN stack-capacity wrinkle in DuckDB 2.0 core
 solved via `detect_stack_use_after_return=1` — §8.6.3), Rust core and C ABI untouched,
-`git -C shell/duckdb describe --tags` → `v2.0.0`. No test was edited; the Makefile now
+`git -C duckdb describe --tags` → `v2.0.0`. No test was edited; the Makefile now
 makes the build and tests runnable with **no extra environment variables** (§8.1) —
 README documents it.
 
 ### 8.1 Deviations / build-invocation requirements
 
-**Follow-up (2026-11-12): items 3 and 4 are now built into `shell/Makefile` — the
+**Follow-up (2026-11-12): items 3 and 4 are now built into `Makefile` (repo root) — the
 build and tests need no extra environment variables at all** (`env -i` with only
 `PATH`+`HOME` and `GEN=ninja make release && make test` passes; documented in the
 repo README's Building section). Kept here as the rationale:
@@ -447,7 +452,7 @@ repo README's Building section). Kept here as the rationale:
    `CMakeLists.txt:63` rejects outright. Both directories deleted before configuring —
    build artifacts only, no source change.
 3. **`OVERRIDE_GIT_DESCRIBE=v2.0.0` must be set for the build** — now
-   `OVERRIDE_GIT_DESCRIBE ?= v2.0.0` in `shell/Makefile`. Without it the shallow duckdb
+   `OVERRIDE_GIT_DESCRIBE ?= v2.0.0` in `Makefile` (repo root). Without it the shallow duckdb
    submodule makes 2.0's CMake compute `v2.0.0-dev1` with normalized version = the
    commit hash (`CMakeLists.txt:564-578`: dev iteration = `git rev-list --count HEAD` =
    1 on a shallow clone). Consequences of the dev stamp: `capped.duckdb_extension` is
@@ -460,7 +465,7 @@ repo README's Building section). Kept here as the rationale:
 4. **fts/vss staging for the two search tests** (§8.6) — the `remote-extensions`
    Makefile target now does by hand what C2 did manually: one `curl
    http://extensions.duckdb.org/v2.0.0/<platform>/{fts,vss}.duckdb_extension.gz | gunzip`
-   per extension into `shell/build/remote-extensions/v2.0.0/<platform>/` (cached across
+   per extension into `build/remote-extensions/v2.0.0/<platform>/` (cached across
    runs), plus a generated `test-config.json`; `test_release`/`test_debug`/
    `test_reldebug`/`test_search`/`asan` depend on it and run with
    `DUCKDB_TEST_CONFIG` exported to that config, which sets the `extension_directory`
@@ -468,7 +473,7 @@ repo README's Building section). Kept here as the rationale:
    fresh per-run temp dir (`unittest.cpp:462-478`) while `ENABLE_EXTENSION_AUTOINSTALL=0`
    blocks downloads.
 
-Reproduce the green run from `capped/shell/`:
+Reproduce the green run from the repo root (`capped/`):
 
 ```sh
 env -i PATH=/opt/homebrew/bin:/usr/bin:/bin HOME=$HOME sh -c 'GEN=ninja make release && make test'
@@ -594,7 +599,7 @@ materialise.
      `capped_fragments_e2e.test` passes standalone (202 assertions) and the full
      gate is green — `All tests passed (2119 assertions in 7 test cases)`, `make
      asan` exit 0. **Adopted:** the option is now in the `asan` target's
-     ASAN_OPTIONS in `shell/Makefile` (with a comment), so no test or artifact
+     ASAN_OPTIONS in `Makefile` (repo root, with a comment), so no test or artifact
      changed and macOS runs the gate too.
    - **(b) asan build at `-O1` — DOES NOT HELP.** A separate instrumented tree
      (`build/asan-o1`, `-DCMAKE_{C,CXX}_FLAGS_RELEASE="-O1 -DNDEBUG"`, plain ASAN
@@ -621,8 +626,8 @@ materialise.
   ASAN_OPTIONS (§8.6.3). Without it, `capped_fragments_e2e.test` overflows the macOS
   worker stack in core's join-order optimiser (class (a)); the other six files pass
   either way with 0 AddressSanitizer errors.
-- `git -C shell/duckdb describe --tags` → `v2.0.0`;
-  `git -C shell/extension-ci-tools log -1 --format='%h %d'` → `c286b12 (HEAD ->
+- `git -C duckdb describe --tags` → `v2.0.0`;
+  `git -C extension-ci-tools log -1 --format='%h %d'` → `c286b12 (HEAD ->
   v2.0-cyanoptera)`.
 
 ### 8.8 Files changed (all uncommitted, left in working tree)

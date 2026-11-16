@@ -2,10 +2,16 @@
 target/
 
 # DuckDB extension build tree
-shell/build/
-shell/.cache/
-shell/duckdb_unittest_tempdir/
-shell/testext/
+build/
+.cache/
+duckdb_unittest_tempdir/
+testext/
+test/python/__pycache__/
+cmake-build-debug/
+.Rhistory
+
+# IDE
+.idea/
 
 # OS
 .DS_Store

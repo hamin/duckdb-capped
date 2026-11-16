@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end demo: OTLP telemetry files -> capped store -> retention -> analytics.
 #
-#   ./demo.sh                     # uses ../../shell/build/release/duckdb
+#   ./demo.sh                     # uses ../../build/release/duckdb
 #   DUCKDB=/path/to/duckdb ./demo.sh
 #
 # Four tables, the cap each one exercises:
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-DUCKDB="${DUCKDB:-$HERE/../../shell/build/release/duckdb}"
+DUCKDB="${DUCKDB:-$HERE/../../build/release/duckdb}"
 TMPD="${TMPDIR:-/tmp}"
 WORK="${WORK:-${TMPD%/}/capped-telemetry-demo}"
 STORE="$WORK/store"

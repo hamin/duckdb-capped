@@ -43,29 +43,29 @@ rationale and prior art: [`docs/capped-tables.md`](../docs/capped-tables.md).
 | Path | What |
 |---|---|
 | `crates/capped-core` | Pure Rust: policy model, segment manifest, seal/eviction planning, C ABI (`src/capi.rs`). No DuckDB dependency. `cargo test`. |
-| `shell/` | DuckDB extension (extension-template based, pinned to DuckDB v2.0.0): `ATTACH (TYPE capped)`, catalog/schema/tables/transactions. `GEN=ninja make release`, then `scripts/smoke.sh`. |
+| Repo root (`Makefile`, `CMakeLists.txt`, `src/`, `test/`) | DuckDB extension (extension-template based, pinned to DuckDB v2.0.0): `ATTACH (TYPE capped)`, catalog/schema/tables/transactions. `GEN=ninja make release`, then `scripts/smoke.sh`. |
 | `examples/telemetry` | End-to-end demo: OTLP files → capped store → retention → analytics (`demo.sh`). |
-| `docs/` (repo root) | Design rationale and prior-art survey. |
+| `docs/` | Design rationale, prior-art survey, and the extension-template docs. |
 
 ## Building
 
 ```sh
 cargo test                                  # Rust core
-cd shell && GEN=ninja make release          # DuckDB + extension
-shell/scripts/smoke.sh                      # end-to-end against local duckdb CLI
+GEN=ninja make release                      # DuckDB + extension
+scripts/smoke.sh                            # end-to-end against local duckdb CLI
 ```
 
 Builds and tests need no extra environment variables:
 
 - The Makefile defaults `OVERRIDE_GIT_DESCRIBE` to the pinned DuckDB tag
   (`v2.0.0`), so the extension is stamped as a release build even though the
-  `shell/duckdb` submodule is a shallow clone; without it, DuckDB 2.0 builds
+  `duckdb` submodule is a shallow clone; without it, DuckDB 2.0 builds
   itself as `v2.0.0-dev<hash>` and refuses to load official v2.0.0 extensions
   (and `capped.duckdb_extension` gets a hash stamp). Override with
   `OVERRIDE_GIT_DESCRIBE=... make ...` when building off-tag.
 - `make test`, `make test_search` and `make asan` stage the official
   `fts`/`vss` extension builds (which the search tests `LOAD`) from
-  `extensions.duckdb.org` into `shell/build/remote-extensions/` on first use —
+  `extensions.duckdb.org` into `build/remote-extensions/` on first use —
   the DuckDB 2.0 test harness replaces `HOME` per run, so an install under
   `~/.duckdb` is invisible to the tests. Files are kept across runs; re-fetch
   by deleting that directory. First run needs network access.
@@ -120,7 +120,7 @@ in Rust here; the shell is a thin C++ registration layer that
 ## Status
 
 - [x] `capped-core`: policy model + parsing (`'7 days'`, `'1GB'`), manifest, eviction planning, seal triggers — unit tested
-- [x] C ABI between core and shell (`src/capi.rs` + `shell/src/include/capped.h`)
+- [x] C ABI between core and shell (`src/capi.rs` + `src/include/capped.h`)
 - [x] M1a shell: `ATTACH (TYPE capped)`, catalog/schema over manifests,
       `CREATE TABLE ... WITH (...)` via Rust policy validation, `DROP TABLE`, `SHOW TABLES`
 - [x] M1b scan path: sealed segments are read by DuckDB's own parquet reader
@@ -318,6 +318,8 @@ Searching needs the `fts` and `vss` extensions available to the session.
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-The `shell/` build tree is built from the DuckDB extension template, which
-stays MIT-licensed (Copyright 2018-2025 Stichting DuckDB Foundation) and
-keeps its own license text at [shell/LICENSE](shell/LICENSE).
+The build tree at the repo root (Makefile, CMakeLists.txt, `src/`, `test/`,
+`scripts/`, the `duckdb` and `extension-ci-tools` submodules) is built from
+the DuckDB extension template, which stays MIT-licensed (Copyright
+2018-2025 Stichting DuckDB Foundation) and keeps its own license text at
+[LICENSE-extension-template](LICENSE-extension-template).

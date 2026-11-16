@@ -27,8 +27,8 @@ set(EXTENSION_SOURCES
 
 # --- Rust core (crates/capped-core, built as a staticlib) --------------------
 # All retention logic lives in Rust; the shell links its C ABI. The crate-type
-# staticlib lives in ../crates/capped-core/Cargo.toml.
-set(CAPPED_WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
+# staticlib lives in crates/capped-core/Cargo.toml.
+set(CAPPED_WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(CAPPED_CORE_TARGET_DIR ${CAPPED_WORKSPACE_DIR}/target/capi)
 set(CAPPED_CORE_LIB ${CAPPED_CORE_TARGET_DIR}/release/libcapped_core.a)
 

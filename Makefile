@@ -51,7 +51,7 @@ test_search:
 # Memory-safety gate (M17): build duckdb + this extension under AddressSanitizer
 # and run the whole sqllogictest suite inside it. Release mode with
 # RELEASE_SANITIZER=1 is deliberate: it injects -fsanitize=address into the
-# global compile flags, so shell/src/*.cpp is instrumented too, not just duckdb
+# global compile flags, so src/*.cpp is instrumented too, not just duckdb
 # proper (CXX_EXTRA_DEBUG alone would miss the extension sources). ASAN errors
 # abort the run, making this a gate rather than a log to read.
 #

@@ -6,7 +6,7 @@ _Status: proposed, 2026-11-11. Scope: `capped` only (Rust core + C++ shell). Ver
 
 Every committed `INSERT` rewrites the table's **entire open segment**.
 
-`shell/src/capped_write.cpp`, `CappedWrite::FlushBuffer` (~L477–490):
+`src/capped_write.cpp`, `CappedWrite::FlushBuffer` (~L477–490):
 
 ```sql
 COPY (SELECT * FROM read_parquet('<open segment>') UNION ALL BY NAME SELECT * FROM <buffer>)
@@ -170,7 +170,7 @@ Replace the "flip the flag" seal in both `ForceSeal` and `EnforceUnlocked(seal_o
 
 `capped_index.cpp` reads `seg.path` of sealed segments only, so it needs no change. Verify by reading it.
 
-### 3.6 Scan path (`shell/src/capped_table.cpp`)
+### 3.6 Scan path (`src/capped_table.cpp`)
 
 - Change `capped_manifest_list_segments` (`capi.rs` ~L513) to emit `"files": [...]` per segment: `[path]` for sealed, the fragment paths in order for open, and `[path]` for a legacy open segment.
 - `SegmentPaths()` (~L145) flattens `files` instead of reading `path`.
@@ -234,7 +234,7 @@ The commit point is always `WriteManifest` (tmp + rename, `capped_storage_info.c
 
   Also simulate 10k commits with a byte-cap seal and with skewed commit sizes.
 
-**T3. C ABI** (`capi.rs` + `shell/src/include/capped.h`)
+**T3. C ABI** (`capi.rs` + `src/include/capped.h`)
 - New: `capped_manifest_add_fragment`, `capped_plan_compaction`, `capped_manifest_apply_compaction`, `capped_manifest_seal_open`, `capped_manifest_sweep_due(manifest, now, out_manifest, out_paths_json)`, `capped_manifest_is_legacy_open`, `capped_manifest_seal_legacy_open`, `capped_manifest_owned_paths` (for GC).
 - `capped_manifest_list_segments` gains `files`, `fragments`.
 - Follow the existing `guard`/`write_string` conventions. Add a `capi` test per function.
@@ -250,7 +250,7 @@ The commit point is always `WriteManifest` (tmp + rename, `capped_storage_info.c
 **T8. Observability:** new columns (§3.9), README updates (layout, SQL surface, known limitations: open-segment byte overestimate, pending-delete bytes, 5-min grace).
 
 **T9. Tests:**
-- New file `shell/test/sql/capped_fragments.test`:
+- New file `test/sql/capped_fragments.test`:
   - 50 single-row committed INSERTs → `count(*)` = 50. `capped_status` fragment count ≤ bound. Files on disk match the manifest.
   - Content equality across compaction and seal: `SELECT sum(hash(*))` (or an ordered `string_agg`) before vs after `capped_seal`.
   - Seal produces one `.seg.parquet` with exact stats (`rows`, `min_ts_us`, `max_ts_us` vs `SELECT min/max` on the data).
@@ -258,13 +258,13 @@ The commit point is always `WriteManifest` (tmp + rename, `capped_storage_info.c
   - Ingest-time table (`_ingest_ts`) through fragments → seal → TTL eviction.
   - `search_columns` table: `capped_fts` works after seal. `capped_index` builds for the compacted file.
   - `on_violation => block`: the rejected commit leaves no fragment file behind.
-  - **Legacy migration:** commit a fixture store (old-format manifest + open `N.seg.parquet`) under `shell/test/data/legacy_store/`. Copy it to `__TEST_DIR__`, ATTACH, assert the old open segment is now sealed, row counts are intact, and a new insert creates fragments.
+  - **Legacy migration:** commit a fixture store (old-format manifest + open `N.seg.parquet`) under `test/data/legacy_store/`. Copy it to `__TEST_DIR__`, ATTACH, assert the old open segment is now sealed, row counts are intact, and a new insert creates fragments.
   - **Crash simulation / GC:** in the test dir create `T/99.frag-000001.parquet` (unreferenced), `T/.flush-1.tmp.parquet`, and a user file `T/user.parquet`. Re-ATTACH. The first two are gone and `user.parquet` survives.
   - `capped_add_segment` path collision: user file at `<open_id>.seg.parquet`, then seal → the fallback name is used and the user file is untouched.
 - Extend `capped_concurrent_tx.test` with interleaved inserts across two connections + an explicit `capped_seal`, asserting the total count.
 
 **T10. Amplification gate + downstream check**
-- `shell/scripts/amplification.sh`: ATTACH a fresh store, run 720 committed INSERT batches of ~2 KB each (mimicking 5 s otlp seals), `capped_seal`. Read `bytes_written` and `bytes` from `capped_tables`. Print a per-tier table: within the 5-minute delete grace the merged-away inputs are still on disk, so group every written file's `parquet_metadata` compressed payload by its rows-per-file (tier 0, 1, 2, …, seal) and show payload ÷ sealed bytes — the column sums to the total ratio. **Gate on row amplification — total rows across all written files ÷ sealed rows <= 4.0** (no row may ride more than ~log_8(720)+1 tiers), **and on the byte ratio <= 6.0** — 6, not 5, because the byte ratio carries a compression penalty on top of the rewrites: a 28-row fragment compresses ~2x worse than the sealed segment (~20 B/row vs ~10.6 B/row), so tier-0 alone costs ~1.9x of the sealed bytes without rewriting any row twice. Also print the old-algorithm ratio (~360x) for the record.
+- `scripts/amplification.sh`: ATTACH a fresh store, run 720 committed INSERT batches of ~2 KB each (mimicking 5 s otlp seals), `capped_seal`. Read `bytes_written` and `bytes` from `capped_tables`. Print a per-tier table: within the 5-minute delete grace the merged-away inputs are still on disk, so group every written file's `parquet_metadata` compressed payload by its rows-per-file (tier 0, 1, 2, …, seal) and show payload ÷ sealed bytes — the column sums to the total ratio. **Gate on row amplification — total rows across all written files ÷ sealed rows <= 4.0** (no row may ride more than ~log_8(720)+1 tiers), **and on the byte ratio <= 6.0** — 6, not 5, because the byte ratio carries a compression penalty on top of the rewrites: a 28-row fragment compresses ~2x worse than the sealed segment (~20 B/row vs ~10.6 B/row), so tier-0 alone costs ~1.9x of the sealed bytes without rewriting any row twice. Also print the old-algorithm ratio (~360x) for the record.
 - `GEN=ninja make release` + `make test` + `make asan` (the ASan suite must pass).
 - In `../lotel`: `just fetch-extensions && just smoke && just stress && SOAK_MINUTES=10 just soak`. Add to lotel's soak report a line with `bytes_written / bytes` from `capped_tables('otel')`. Check the `/storage` page renders the new columns sanely.
 
