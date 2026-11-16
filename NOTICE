@@ -1,0 +1,6 @@
+capped — Copyright 2026 Haris Amin
+
+This product includes code from the DuckDB extension template
+(https://github.com/duckdb/extension-template), licensed under the MIT
+License, Copyright 2018-2025 Stichting DuckDB Foundation. That code keeps
+its own license text at shell/LICENSE.

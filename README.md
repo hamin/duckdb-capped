@@ -313,3 +313,11 @@ sidecar has a fixed floor (~190 KB text-only, ~2 MB once HNSW is involved, which
 needs DuckDB's standard block size) — indexing a handful of tiny segments costs
 more index than data, which is exactly why search is opt-in and uncounted.
 Searching needs the `fts` and `vss` extensions available to the session.
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The `shell/` build tree is built from the DuckDB extension template, which
+stays MIT-licensed (Copyright 2018-2025 Stichting DuckDB Foundation) and
+keeps its own license text at [shell/LICENSE](shell/LICENSE).
