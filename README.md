@@ -34,9 +34,39 @@ SELECT * FROM capped_add_segment('tlog', 'events', 'events/9.seg.parquet');
 
 Design in one line: each table is an ordered sequence of immutable sealed
 segment files plus one open segment, so retention is **deleting whole files**
-— O(1), exact byte caps, no delete tombstones, no compaction of sealed
-data. Full design
-rationale and prior art: [`docs/capped-tables.md`](../docs/capped-tables.md).
+— the cost scales with the number of files deleted, and data is never
+rewritten — exact byte caps, no delete tombstones, no compaction of sealed
+data. Full design rationale and prior art:
+[`docs/capped-tables.md`](docs/capped-tables.md).
+
+## Why whole-file retention
+
+Eviction never opens a file it keeps. The planner
+(`crates/capped-core/src/eviction.rs`) picks only **whole sealed segments**:
+a segment is age-droppable only when its entire span is past `ttl + grace`,
+size and count caps drop the oldest segments until the table fits, and the
+open segment is never a candidate. Executing a plan is one manifest rewrite
+and one unlink per dropped segment — its index sidecar goes with it — so the
+cost scales with the number of files removed, and nothing that survives is
+read, rewritten, or compacted: sealed segments are immutable, and compaction
+only ever merges fragments of the open segment, whose bytes are about to be
+rewritten anyway.
+
+Compare a native DuckDB table with scheduled `DELETE`s: the delete itself
+reclaims no space — that comes back, partially, at `CHECKPOINT`, and only
+once ~25% of rows in adjacent row groups are deleted — and `VACUUM` is a
+stats tool that reclaims nothing at all ([design doc
+§3](docs/capped-tables.md), verified against the DuckDB 2.0 docs).
+Tombstones, deletion vectors and checkpoint timing are exactly the machinery
+capped sidesteps by making the segment the unit of forgetting.
+
+The price is granularity. Retention forgets in segment-sized pieces: one
+row still inside `ttl` keeps its whole segment, and a size cap needing a few
+bytes of relief drops an entire segment. The open segment cannot be evicted
+at all — it is being written — so a table can sit over budget until the next
+seal (`on_violation => block` turns that overshoot into a rejected commit).
+The segment size — the seal limits, ~128 MB / 1 M rows / 1 h span, or
+whatever `capped_seal` rotates — is therefore also the retention granularity.
 
 ## Repo layout
 
@@ -45,6 +75,7 @@ rationale and prior art: [`docs/capped-tables.md`](../docs/capped-tables.md).
 | `crates/capped-core` | Pure Rust: policy model, segment manifest, seal/eviction planning, C ABI (`src/capi.rs`). No DuckDB dependency. `cargo test`. |
 | Repo root (`Makefile`, `CMakeLists.txt`, `src/`, `test/`) | DuckDB extension (extension-template based, pinned to DuckDB v2.0.0): `ATTACH (TYPE capped)`, catalog/schema/tables/transactions. `GEN=ninja make release`, then `scripts/smoke.sh`. |
 | `examples/telemetry` | End-to-end demo: OTLP files → capped store → retention → analytics (`demo.sh`). |
+| `examples/event_log` | No-OTLP example: append-only event log — insert loop, `ttl` + a measured `max_bytes`, `capped_status`, `capped_seal` (`demo.sh`). |
 | `docs/` | Design rationale, prior-art survey, and the extension-template docs. |
 
 ## Building
@@ -98,6 +129,20 @@ which files survived, and the script finishes with cross-signal analytics
 (error rate by service, span p95, request volume) over what is left. The store
 is left behind in a temp directory for poking at (set `WORK=` to keep it
 somewhere specific, `DUCKDB=` to point at another binary).
+
+## Try it: an append-only event log
+
+```sh
+examples/event_log/demo.sh      # needs the release build above
+```
+
+Same store, no OTLP and no generated files: one `app_log` table takes seven
+SQL-generated day-batches in an insert loop, one transaction and one
+`capped_seal` per batch. `ttl = '3 days'` then drops the four expired days,
+and a measured `max_bytes` drops the oldest survivor after that —
+`capped_status` shows which files survived, and a final `capped_seal`
+rotates a partially-filled open segment. The store is left behind in a temp
+directory; `WORK=` / `DUCKDB=` work as above.
 
 ## Why a shell layer exists at all
 

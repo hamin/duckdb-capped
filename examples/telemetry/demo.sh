@@ -17,17 +17,21 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DUCKDB="${DUCKDB:-$HERE/../../build/release/duckdb}"
+EXT="${EXT:-$HERE/../../build/release/extension/capped/capped.duckdb_extension}"
 TMPD="${TMPDIR:-/tmp}"
 WORK="${WORK:-${TMPD%/}/capped-telemetry-demo}"
 STORE="$WORK/store"
 OTLP="$WORK/otlp"
 
 [[ -x "$DUCKDB" ]] || { echo "no duckdb binary at $DUCKDB (build the shell, or set DUCKDB=)"; exit 1; }
+[[ -f "$EXT" ]] || { echo "extension not built: $EXT (run: GEN=ninja make release)"; exit 1; }
 DUCKDB="$(cd "$(dirname "$DUCKDB")" && pwd)/$(basename "$DUCKDB")"
+EXT="$(cd "$(dirname "$EXT")" && pwd)/$(basename "$EXT")"
 
 # -unsigned: the community otlp extension is not signed. -noheader -list: raw output for shell capture.
-db()      { "$DUCKDB" -unsigned -noheader -list -c "$1"; }
-pretty()  { "$DUCKDB" -unsigned -c "$1"; }
+# LOAD capped: the built loadable extension — the release CLI does not link it in.
+db()      { "$DUCKDB" -unsigned -noheader -list -c "LOAD '$EXT'; $1"; }
+pretty()  { "$DUCKDB" -unsigned -c "LOAD '$EXT'; $1"; }
 show(){ echo; echo "── $1 ──────────────────────────────────────────────"; }
 
 # ---------------------------------------------------------------- extensions
@@ -74,7 +78,7 @@ insert_searchable_logs() {
 INSERT INTO cs.main.searchable_logs
 SELECT time_unix_nano::TIMESTAMPTZ, service_name, severity_text, body,
        list_transform($words,
-         w -> ((length(lower(body)) - length(replace(lower(body), w, ''))) / length(w))::FLOAT
+         lambda w: ((length(lower(body)) - length(replace(lower(body), w, ''))) / length(w))::FLOAT
        )::FLOAT[8]
 FROM read_otlp_logs('$OTLP/logs-$1.otlp');
 SELECT * FROM capped_seal('cs', 'searchable_logs');
@@ -281,4 +285,4 @@ fi
 echo
 echo "DEMO OK — store kept at $WORK (re-running wipes and rebuilds it)"
 echo "  poke around:"
-echo "    $DUCKDB -unsigned -c \"LOAD otlp; ATTACH '$WORK/store' AS cs (TYPE capped); SELECT * FROM capped_tables('cs');\""
+echo "    $DUCKDB -unsigned -c \"LOAD '$EXT'; LOAD otlp; ATTACH '$WORK/store' AS cs (TYPE capped); SELECT * FROM capped_tables('cs');\""
