@@ -1,0 +1,45 @@
+# DuckDB community-extensions descriptor for capped.
+#
+# Copy into community-extensions as extensions/capped/description.yml (the
+# directory name must match extension.name), after filling in repo.ref with
+# the commit sha pushed to https://github.com/hamin/duckdb-capped.
+extension:
+  name: capped
+  description: Bounded storage for DuckDB — telemetry tables that forget, with retention by age (ttl), size (max_bytes), or row count (max_rows) over immutable Parquet segments
+  version: 0.1.0
+  language: "C++ & Rust"
+  build: cmake
+  license: Apache-2.0
+  requires_toolchains: "rust"
+  excluded_platforms: "linux_amd64_musl;linux_arm64_musl;windows_amd64;windows_arm64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads"
+  # osx_amd64 is an opt-in entry in extension-ci-tools' distribution matrix,
+  # so the registry only builds it when opted into here.
+  opt_in_platforms: osx_amd64
+  maintainers:
+    - hamin
+
+repo:
+  github: hamin/duckdb-capped
+  ref: "<commit-sha-after-push>"
+
+docs:
+  hello_world: |
+    INSTALL capped FROM community;
+    LOAD capped;
+
+    ATTACH 'telemetry-store' AS t (TYPE capped);
+    CREATE TABLE t.main.events(ts TIMESTAMPTZ, severity VARCHAR, body VARCHAR) WITH (time_col = 'ts', ttl = '7 days', max_bytes = '1GB');
+    INSERT INTO t.main.events VALUES (now(), 'info', 'hello capped');
+    SELECT severity, body FROM t.main.events;
+
+  extended_description: |
+    capped is a DuckDB storage extension for telemetry data (logs, metrics,
+    traces, events): each table is created with caps — `ttl`, `max_bytes` and
+    `max_rows` — and data appends in while the oldest data flows out when a
+    table gets too old, too big, or too full. Each table is a sequence of
+    immutable Parquet segment files plus one open segment, read by DuckDB's own
+    parquet reader, so retention deletes whole sealed segment files: the cost
+    scales with the number of files removed and data is never rewritten.
+    Retention runs at ATTACH, on every write and on a background thread, and
+    tables can optionally build per-segment full-text and vector indexes
+    answered by `capped_fts` and `capped_vector_search`.
