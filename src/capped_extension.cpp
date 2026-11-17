@@ -78,7 +78,11 @@ unique_ptr<Catalog> CappedAttach(optional_ptr<StorageExtensionInfo> storage_info
 			}
 		}
 	}
-	return catalog;
+	// std::move is load-bearing, not style: returning the named unique_ptr by name
+	// relies on the C++20 implicit-move-on-return, which GCC <= 12 rejects (the
+	// unique_ptr<CappedCatalog> -> unique_ptr<Catalog> conversion is not a copy
+	// elision, so the name stays an lvalue there). Clang and GCC >= 13 accept it.
+	return std::move(catalog);
 }
 
 unique_ptr<TransactionManager> CappedCreateTransactionManager(optional_ptr<StorageExtensionInfo> storage_info,
@@ -137,7 +141,7 @@ unique_ptr<FunctionData> AddSegmentBind(ClientContext &context, TableFunctionBin
 	bind_data->rel_path = input.inputs[2].DefaultCastAs(LogicalType::VARCHAR).ToString();
 	return_types.push_back(LogicalType::VARCHAR);
 	names.push_back("capped_add_segment");
-	return bind_data;
+	return std::move(bind_data);
 }
 
 unique_ptr<GlobalTableFunctionState> AddSegmentInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -339,7 +343,7 @@ unique_ptr<FunctionData> StatusBind(ClientContext &context, TableFunctionBindInp
 	// count; 0 for sealed segments (the seal clears them)
 	names.emplace_back("fragments");
 	return_types.emplace_back(LogicalType::BIGINT);
-	return bind_data;
+	return std::move(bind_data);
 }
 
 unique_ptr<GlobalTableFunctionState> StatusInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -422,7 +426,7 @@ unique_ptr<FunctionData> SealBind(ClientContext &context, TableFunctionBindInput
 	bind_data->table = input.inputs[1].DefaultCastAs(LogicalType::VARCHAR).ToString();
 	return_types.push_back(LogicalType::VARCHAR);
 	names.emplace_back("capped_seal");
-	return bind_data;
+	return std::move(bind_data);
 }
 
 unique_ptr<GlobalTableFunctionState> SealInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -490,7 +494,7 @@ unique_ptr<FunctionData> EnforceBind(ClientContext &context, TableFunctionBindIn
 	names.emplace_back("segments_dropped");
 	return_types.push_back(LogicalType::BOOLEAN);
 	names.emplace_back("open_sealed");
-	return bind_data;
+	return std::move(bind_data);
 }
 
 unique_ptr<GlobalTableFunctionState> EnforceInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -624,7 +628,7 @@ unique_ptr<FunctionData> TablesBind(ClientContext &context, TableFunctionBindInp
 	names.emplace_back("bytes_written");
 	return_types.push_back(LogicalType::BIGINT);
 	names.emplace_back("pending_delete_files");
-	return bind_data;
+	return std::move(bind_data);
 }
 
 unique_ptr<GlobalTableFunctionState> TablesInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -769,7 +773,7 @@ unique_ptr<FunctionData> IndexBuildBind(ClientContext &context, TableFunctionBin
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("build_error");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	return bind_data;
+	return std::move(bind_data);
 }
 
 unique_ptr<GlobalTableFunctionState> IndexBuildInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -924,7 +928,7 @@ unique_ptr<FunctionData> FtsBind(ClientContext &context, TableFunctionBindInput 
 		                      bind_data->table);
 	}
 	DeclareSearchColumns(return_types, names, spec.columns);
-	return bind_data;
+	return std::move(bind_data);
 }
 
 unique_ptr<GlobalTableFunctionState> FtsInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -976,7 +980,7 @@ unique_ptr<FunctionData> VectorSearchBind(ClientContext &context, TableFunctionB
 	// the column choice is validated for real inside SearchVector, which also
 	// needs the metric and dimension from the same manifest read
 	bind_data->query = column;
-	return bind_data;
+	return std::move(bind_data);
 }
 
 unique_ptr<GlobalTableFunctionState> VectorSearchInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
