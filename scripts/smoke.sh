@@ -2,7 +2,7 @@
 # Smoke-test the loadable capped extension against the local duckdb CLI
 # (must be the same DuckDB version the extension was built against).
 #
-# Usage: scripts/smoke.sh    (from capped/shell after `GEN=ninja make release`)
+# Usage: scripts/smoke.sh    (after `GEN=ninja make release`)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

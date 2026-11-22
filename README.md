@@ -204,7 +204,7 @@ in Rust here; the shell is a thin C++ registration layer that
       them and merge the per-segment top-k table-wide. Parquet stays the only
       source of truth — the index is derived, best-effort, and follows retention
 - [ ] M2c (open): Lance segment variant (measured; deferred — DuckDB-native
-      sidecars won for now), name revisit before publishing
+      sidecars won for now)
 
 ## How data lives on disk
 
