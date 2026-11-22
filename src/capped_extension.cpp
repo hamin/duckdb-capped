@@ -69,7 +69,7 @@ unique_ptr<Catalog> CappedAttach(optional_ptr<StorageExtensionInfo> storage_info
 		for (auto &table : catalog->Storage().ListTables(catalog->FS())) {
 			try {
 				// migrate a legacy open segment, sweep due deletes, collect
-				// orphan crash leftovers (§3.7/§3.8); best effort like the
+				// orphan crash leftovers; best effort like the
 				// enforce pass below — ATTACH must never fail over it
 				CappedWrite::AttachMaintenance(*catalog, table);
 				CappedWrite::Enforce(*catalog, table);
@@ -339,7 +339,7 @@ unique_ptr<FunctionData> StatusBind(ClientContext &context, TableFunctionBindInp
 	return_types.emplace_back(LogicalType::BOOLEAN);
 	names.emplace_back("index_bytes");
 	return_types.emplace_back(LogicalType::BIGINT);
-	// append-only below (fragments plan §3.9): open-segment fragment file
+	// append-only below: open-segment fragment file
 	// count; 0 for sealed segments (the seal clears them)
 	names.emplace_back("fragments");
 	return_types.emplace_back(LogicalType::BIGINT);
@@ -565,7 +565,7 @@ struct CappedTablesGlobalState : public GlobalTableFunctionState {
 		string last_maintenance_error;
 		bool has_maintenance_error = false;
 		//! cumulative Parquet bytes capped wrote, and files queued in
-		//! pending_deletes (fragments plan §3.9)
+		//! pending_deletes
 		int64_t bytes_written = 0;
 		int64_t pending_delete_files = 0;
 		CappedPolicySummary policy;
@@ -617,7 +617,7 @@ unique_ptr<FunctionData> TablesBind(ClientContext &context, TableFunctionBindInp
 	names.emplace_back("indexed");
 	return_types.push_back(LogicalType::BIGINT);
 	names.emplace_back("index_bytes");
-	// append-only below: lotel reads this table with SELECT * (fragments plan §3.9)
+	// append-only below: lotel reads this table with SELECT *
 	return_types.push_back(LogicalType::BIGINT);
 	names.emplace_back("fragments");
 	return_types.push_back(LogicalType::BIGINT);

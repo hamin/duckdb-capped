@@ -1,11 +1,11 @@
-//! Size-tiered fragment compaction policy (open-segment fragments plan §3.4).
+//! Size-tiered fragment compaction policy (docs/open-segments.md).
 //!
 //! Every commit appends a tier-0 fragment to the open segment; left alone,
 //! those files grow the segment's scan into thousands of tiny Parquet readers.
 //! The policy merges **runs of `K` adjacent same-tier fragments** into one
 //! fragment of the next tier, up to tier `T`. With K=8, T=2 an open segment
 //! holds at most K−1 tier-0 + K−1 tier-1 fragments plus accumulated tier-2
-//! files (about one per K^K commits), and every byte is rewritten at most
+//! files (about one per K² commits), and every byte is rewritten at most
 //! `T` times by merging plus once by the final seal: ≤ 4× write cost.
 //!
 //! Merging is **contiguous-only**: only an adjacent run may merge, and the
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_FAN_IN: usize = 8;
 /// Highest tier a fragment may reach; tier `T` files are never merged again.
 pub const DEFAULT_MAX_TIER: u8 = 2;
-/// Upper bound on the number of files one open segment may have (§5 T6).
+/// Upper bound on the number of files one open segment may have.
 /// Compaction alone does not bound it: `max_span` measures data timestamps
 /// (unset without a time column), the size/row seals can take ~36k tiny
 /// commits to fire, so the shell seals once the open segment reaches this
@@ -29,8 +29,8 @@ pub const DEFAULT_MAX_TIER: u8 = 2;
 /// `should_seal`.
 pub const MAX_OPEN_FRAGMENTS: usize = 32;
 
-/// Tunables for [`plan_compaction`]. Defaults: `fan_in = 8`, `max_tier = 2`
-/// (plan §3.4). Table options are deliberately not exposed yet (F4).
+/// Tunables for [`plan_compaction`]. Defaults: `fan_in = 8`, `max_tier = 2`.
+/// Table options are deliberately not exposed yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionLimits {
     pub fan_in: usize,
@@ -62,7 +62,7 @@ pub struct CompactionPlan {
 
 /// Lowest tier first: if the open segment has `K` **contiguous** fragments at
 /// tier `t < max_tier`, merge the oldest `K` of them into one tier-`t+1`
-/// fragment (plan §3.4). Returns `None` when nothing qualifies.
+/// fragment. Returns `None` when nothing qualifies.
 ///
 /// "Oldest" is list position, which is insertion order: the first qualifying
 /// run at the lowest tier that has one wins, and the plan takes that run's
@@ -239,15 +239,14 @@ mod tests {
         assert_eq!(plan_compaction(&open_with(Vec::new()), &limits()), None);
     }
 
-    // ---- simulation: the T2 gate --------------------------------------------
+    // ---- simulation: the amplification gate --------------------------------
     //
     // Models one table under continuous commits: each commit appends a tier-0
     // fragment, plans are applied to a fixed point, and segments are sealed by
     // `should_seal` (or at the end of the run). Bytes are additive — a merge or
-    // seal output costs exactly the sum of its inputs — matching the plan's
-    // "model bytes as additive" for the ≤ 4× gate. The gate asserts, per the
-    // plan: bytes written / bytes sealed <= 4.0, max open-segment fragments
-    // <= 26, and insertion order preserved (checked after every single step).
+    // seal output costs exactly the sum of its inputs — so the gate
+    // measures rewrites, not compression. The gate asserts: bytes written /
+    // bytes sealed <= 4.0, max open-segment fragments <= 26, and insertion order preserved (checked after every single step).
 
     struct Sim {
         m: crate::manifest::Manifest,
@@ -403,7 +402,7 @@ mod tests {
                     self.ids.remove(s);
                 }
                 self.ids.insert(out_seq, merged);
-                // §3.4: the output takes the run's position in the list.
+                // The output takes the run's position in the list.
                 assert_eq!(
                     self.m.open_segment().unwrap().fragments[expect_start].seq,
                     out_seq,
@@ -484,7 +483,7 @@ mod tests {
         }
     }
 
-    /// T2 gate: 720 equal commits (the ~1h-at-5s-span seal of §1), then seal.
+    /// Gate: 720 equal commits (an hour of 5-second commits), then seal.
     #[test]
     fn sim_720_equal_commits_then_seal() {
         let mut sim = Sim::new();
@@ -508,9 +507,9 @@ mod tests {
         assert!(sim.m.open_segment().is_none(), "everything sealed");
     }
 
-    /// T2 gate: 10k commits into byte-cap-sealed segments (a busy table
+    /// Gate: 10k commits into byte-cap-sealed segments (a busy table
     /// heading toward the size seal; the row cap models the 1 h span seal's
-    /// bounded commit count — the plan's 26-file bound assumes that bound).
+    /// bounded commit count — the 26-file bound assumes that bound).
     #[test]
     fn sim_10k_commits_byte_cap_seal() {
         let mut sim = Sim::new();
@@ -546,7 +545,7 @@ mod tests {
         assert!(sim.m.segments.len() > 1, "the byte cap must actually split segments");
     }
 
-    /// T2 gate: same as above with skewed commit sizes (a size-tiered policy
+    /// Gate: same as above with skewed commit sizes (a size-tiered policy
     /// merges by tier and count, not size, so heavy bytes must still stay
     /// under 4× and the file bound under 26).
     #[test]
@@ -589,7 +588,7 @@ mod tests {
         assert!(sim.m.segments.len() > 1, "the byte cap must actually split segments");
     }
 
-    /// §5 T6 gate: nothing bounds commits per segment except the file-count
+    /// Gate: nothing bounds commits per segment except the file-count
     /// seal — the span trigger is gone (no time column), the size/row caps are
     /// set never to trip. 10k tiny commits must keep every published manifest
     /// state at <= MAX_OPEN_FRAGMENTS open files, and the 4.0x amplification

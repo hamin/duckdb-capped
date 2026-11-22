@@ -57,7 +57,7 @@ int32_t capped_manifest_put_segment(const char *manifest_json, const char *segme
 int32_t capped_manifest_remove_segments(const char *manifest_json, const char *ids_json,
                                         char **out_manifest_json, char **out_err);
 
-/* ---- open-segment fragments (fragments plan §3.3–§3.8). The manifest swap
+/* ---- open-segment fragments (docs/open-segments.md). The manifest swap
  * (persisting out_manifest_json) is the single commit point of every step. */
 
 /* fragment_json: {"seq":4,"path":"t/1.frag-000004.parquet","rows":12,
@@ -114,7 +114,7 @@ int32_t capped_manifest_seal_legacy_open(const char *manifest_json, int64_t now_
 int32_t capped_manifest_owned_paths(const char *manifest_json, char **out_paths_json,
                                     char **out_err);
 
-/* Writes DELETE_GRACE (pending-delete grace period, fragments plan §3.2) in
+/* Writes DELETE_GRACE (pending-delete grace period) in
  * microseconds: the minimum age for orphan GC candidates, and the constant
  * the shell uses to translate the test-only grace override into the
  * now_micros passed to the queueing calls. */
@@ -132,12 +132,12 @@ int32_t capped_should_seal(const char *manifest_json, const char *limits_json,
 int32_t capped_should_seal_default(const char *manifest_json, int32_t *out_seal, char **out_err);
 
 /* 1 when the open segment holds at least MAX_OPEN_FRAGMENTS (32) fragment
- * files: the file-count seal trigger (fragments plan §5 T6), checked after
+ * files: the file-count seal trigger, checked after
  * the compaction loop alongside capped_should_seal_default. 0 when the
  * manifest has no open segment. */
 int32_t capped_manifest_needs_fragment_seal(const char *manifest_json, int32_t *out_seal, char **out_err);
 
-/* Table-level accounting for capped_tables (fragments plan §3.9): every
+/* Table-level accounting for capped_tables: every
  * Parquet byte capped wrote for this table (write_stats.bytes_written; an
  * adopted seal output is not counted twice), and the number of files waiting
  * in pending_deletes. */

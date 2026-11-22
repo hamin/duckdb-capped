@@ -475,7 +475,7 @@ pub unsafe extern "C" fn capped_manifest_next_segment_id(
 }
 
 /// next_fragment_seq of the open segment: the shell assigns fragment seqs from
-/// this (fragments plan §3.1: per segment, monotonic, never reused, merged
+/// this (per segment, monotonic, never reused, merged
 /// outputs take a fresh seq). Errors when the manifest has no open segment.
 ///
 /// # Safety
@@ -640,14 +640,14 @@ pub unsafe extern "C" fn capped_manifest_remove_segments(
 }
 
 // ---------------------------------------------------------------------------
-// open-segment fragments (fragments plan §3.3–§3.8): commit writes a fragment
+// open-segment fragments (docs/open-segments.md): commit writes a fragment
 // file, `plan_compaction`/`apply_compaction` merge runs of fragments, `seal_open`
 // is the final compaction, and the sweep/GC helpers retire files the manifest
 // no longer references. In every case the manifest swap (persisting
 // out_manifest_json) is the single commit point.
 // ---------------------------------------------------------------------------
 
-/// Record a written fragment file on the open segment (fragments plan §3.3):
+/// Record a written fragment file on the open segment:
 /// the shell has already COPY'd the file to `fragment_json`'s path, this makes
 /// the manifest name it, keeps the open segment's aggregates in step with its
 /// fragments, and bumps `write_stats`. `fragment_json` is a `FragmentMeta`:
@@ -687,7 +687,7 @@ pub unsafe extern "C" fn capped_manifest_add_fragment(
 }
 
 /// The next fragment merge for the open segment under the built-in size-tiered
-/// limits (fan-in K=8, max tier T=2; fragments plan §3.4), or JSON `null` when
+/// limits (fan-in K=8, max tier T=2), or JSON `null` when
 /// nothing qualifies. The shell runs this in a loop, applying each plan until
 /// it gets `null` (a tier-1 merge can cascade into a tier-2 merge).
 /// Output: `{"segment":1,"inputs":[4,5,6,7,8,9,10,11],"output_tier":1,
@@ -746,7 +746,7 @@ pub unsafe extern "C" fn capped_plan_compaction(
     )
 }
 
-/// Commit a merge written to disk (fragments plan §3.4): replaces the `inputs`
+/// Commit a merge written to disk: replaces the `inputs`
 /// run named by `plan_json` (as returned by `capped_plan_compaction`) with the
 /// already-written `output_fragment_json` (`FragmentMeta` with a fresh seq and
 /// `tier` one above the inputs) at the run's list position, so insertion order
@@ -784,7 +784,7 @@ pub unsafe extern "C" fn capped_manifest_apply_compaction(
 }
 
 /// Seal the open segment whose fragments the shell has merged into the final
-/// file (fragments plan §3.5): `output_segment_json` is a `SegmentMeta` giving
+/// file: `output_segment_json` is a `SegmentMeta` giving
 /// the final `path` and the **exact** stats computed from that file; `rows`
 /// must equal the fragments' rows (a seal never loses or gains rows). The
 /// segment becomes sealed (`sealed_at = now_micros`); fragment files move to
@@ -819,7 +819,7 @@ pub unsafe extern "C" fn capped_manifest_seal_open(
     )
 }
 
-/// Drop pending deletes whose 5-minute grace has elapsed (fragments plan §3.7):
+/// Drop pending deletes whose 5-minute grace has elapsed:
 /// writes the swept manifest to `out_manifest_json` and the now-deletable
 /// store-relative paths as a JSON array to `out_paths_json`. The shell
 /// persists the manifest first, then deletes the files (an in-flight scan
@@ -853,7 +853,7 @@ pub unsafe extern "C" fn capped_manifest_sweep_due(
 }
 
 /// Does the manifest hold a legacy (pre-fragment) open segment — unsealed, no
-/// fragments, data at `path` (fragments plan §3.8)? Writes 0/1 to `out_legacy`.
+/// fragments, data at `path`? Writes 0/1 to `out_legacy`.
 /// Such a segment must be migrated with `capped_manifest_seal_legacy_open`
 /// before fragments are added or `capped_manifest_seal_open` is used.
 ///
@@ -881,7 +881,7 @@ pub unsafe extern "C" fn capped_manifest_is_legacy_open(
     )
 }
 
-/// Migrate a legacy open segment in place (fragments plan §3.8): it is already
+/// Migrate a legacy open segment in place: it is already
 /// a complete Parquet file at its `path`, so sealing just flips `sealed` and
 /// sets `sealed_at = now_micros` — no rewrite, no new name, nothing counted
 /// in `write_stats`. The next insert starts a fresh fragment-based open
@@ -910,12 +910,12 @@ pub unsafe extern "C" fn capped_manifest_seal_legacy_open(
 }
 
 /// Every store-relative path the manifest references, as a JSON array — the
-/// ATTACH-time orphan GC (fragments plan §3.7) must never delete a file named
+/// ATTACH-time orphan GC must never delete a file named
 /// here: sealed segment files, fragment files of the open segment, the data
 /// file of a legacy open segment, recorded index sidecars, and pending
 /// deletes. The *planned* sealed path of a fragment-based open segment is
 /// deliberately excluded: it names no existing file, and the crash matrix
-/// (§4) requires the GC to be able to remove a stray seal output there while
+/// requires the GC to be able to remove a stray seal output there while
 /// the segment is still open.
 ///
 /// # Safety
@@ -954,8 +954,8 @@ pub unsafe extern "C" fn capped_manifest_owned_paths(
     )
 }
 
-/// The pending-delete grace period in microseconds (fragments plan §3.2:
-/// DELETE_GRACE, 5 minutes). The shell uses it as the minimum age for orphan
+/// The pending-delete grace period in microseconds (DELETE_GRACE,
+/// 5 minutes). The shell uses it as the minimum age for orphan
 /// GC candidates and to translate the test-only grace override into the
 /// `now_micros` it passes to the queueing calls (which schedule
 /// `not_before = now_micros + DELETE_GRACE` internally).
@@ -1081,8 +1081,8 @@ pub unsafe extern "C" fn capped_should_seal_default(
     )
 }
 
-/// Does the open segment hold at least [`MAX_OPEN_FRAGMENTS`] fragment files
-/// (fragments plan §5 T6)? Writes 0/1 to `out_seal`. The size/row/span seals
+/// Does the open segment hold at least [`MAX_OPEN_FRAGMENTS`] fragment files?
+/// Writes 0/1 to `out_seal`. The size/row/span seals
 /// bound nothing for a table without a time column and tiny commits, so the
 /// shell seals on this too — after the compaction loop, alongside
 /// [`capped_should_seal_default`]. No open segment => 0.
@@ -1114,11 +1114,11 @@ pub unsafe extern "C" fn capped_manifest_needs_fragment_seal(
     )
 }
 
-/// Table-level accounting for `capped_tables` (fragments plan §3.9): writes the
+/// Table-level accounting for `capped_tables`: writes the
 /// manifest's `write_stats.bytes_written` (every Parquet byte capped wrote:
 /// fragments, compaction merges, seal rewrites; an adopted seal output is not
 /// counted twice) to `out_bytes_written`, and the number of files currently
-/// waiting in `pending_deletes` (fragments plan §3.7) to
+/// waiting in `pending_deletes` to
 /// `out_pending_delete_files`.
 ///
 /// # Safety
@@ -1692,7 +1692,7 @@ mod tests {
         assert_eq!(v["next_segment_id"], 1);
     }
 
-    // ---- fragment ABI (fragments plan T3) -----------------------------------
+    // ---- fragment ABI -------------------------------------------------------
 
     /// Manifest with one fresh (fragment-based) open segment id 1.
     fn open_fragment_manifest() -> CString {

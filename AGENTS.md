@@ -19,7 +19,7 @@ Two halves, joined by a C ABI:
 | `src/include/capped.h` ↔ `crates/capped-core/src/capi.rs` | The ABI. Rust is authoritative; change both in the same commit. |
 | `test/sql/*.test` | sqllogictests for the extension. |
 | `examples/` | Runnable demos (`telemetry/`, `event_log/`). |
-| `docs/` | Design notes (`capped-tables.md`, `duckdb-2.0-port.md`, `naming.md`) plus the upstream extension-template docs (`README.md`, `UPDATING.md`). |
+| `docs/` | `design.md` (why and how), `open-segments.md` (the write path), `updating-duckdb.md` (bumping the pin). Keep them true to the code; plans and work logs don't belong here. |
 
 ## Commands
 
@@ -47,7 +47,7 @@ Before calling a change done: `cargo test` and clippy for Rust changes,
   `.github/workflows/MainDistributionPipeline.yml` passes the same pair. Move
   them together. The Makefile's `OVERRIDE_GIT_DESCRIBE ?= v2.0.0` is what makes
   a shallow submodule build behave like the release; don't remove it
-  (`docs/duckdb-2.0-port.md` §8.1).
+  (`docs/updating-duckdb.md`).
 - **Only JSON strings and primitives cross the FFI.** Strings returned by Rust
   are freed with `capped_free_string`; failures return `CAPPED_ERR` with a
   message in `*out_err`. Never pass C++ objects or Rust structs across.

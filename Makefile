@@ -10,7 +10,7 @@ EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 # .duckdb_extension gets a hash stamp too. Pin the describe output so the
 # build behaves like the v2.0.0 release (what the submodules are checked out
 # at). Override for off-tag builds: `OVERRIDE_GIT_DESCRIBE=... make ...`.
-# (docs/duckdb-2.0-port.md §8.1.3)
+# (docs/updating-duckdb.md §2)
 OVERRIDE_GIT_DESCRIBE ?= v2.0.0
 
 # The search tests LOAD fts/vss, which are remote extensions. The 2.0 test
@@ -20,7 +20,7 @@ OVERRIDE_GIT_DESCRIBE ?= v2.0.0
 # `make test_search` and `make asan` stage the official builds for
 # $(OVERRIDE_GIT_DESCRIBE) from extensions.duckdb.org into
 # build/remote-extensions themselves (one curl per extension, kept across
-# runs). (docs/duckdb-2.0-port.md §8.1.4)
+# runs). (docs/updating-duckdb.md §3)
 REMOTE_EXT_PLATFORM ?= $(shell uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/osx/')_$(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 REMOTE_EXT_STAGE := $(PROJ_DIR)build/remote-extensions
 REMOTE_EXT_LIST := fts vss
@@ -48,7 +48,7 @@ test_search: remote-extensions
 test_search:
 	build/release/test/unittest "test/sql/capped_search.test"
 
-# Memory-safety gate (M17): build duckdb + this extension under AddressSanitizer
+# Memory-safety gate: build duckdb + this extension under AddressSanitizer
 # and run the whole sqllogictest suite inside it. Release mode with
 # RELEASE_SANITIZER=1 is deliberate: it injects -fsanitize=address into the
 # global compile flags, so src/*.cpp is instrumented too, not just duckdb
@@ -65,7 +65,7 @@ test_search:
 #   detect_stack_use_after_return=1  ASAN moves instrumented frame locals to the
 #       heap. Needed on macOS: duckdb 2.0's deeper join-order-optimiser recursion
 #       (core, not capped) overflows the 512 KB default worker-thread stack under
-#       plain ASAN frames — see docs/duckdb-2.0-port.md §8.6.3.
+#       plain ASAN frames — see docs/updating-duckdb.md §4.
 
 # Gate the leaf targets that launch unittest (not `test` itself — its prereq
 # order would put the runner before the staging).

@@ -1,6 +1,6 @@
 # name: test/sql/capped_maintenance.test
-# description: ATTACH-time maintenance: legacy open-segment migration (§3.8),
-#              pending-delete sweep timing (§3.7), orphan GC safety (§3.7),
+# description: ATTACH-time maintenance: legacy open-segment migration,
+#              pending-delete sweep timing, orphan GC safety,
 #              and READ_ONLY ATTACH doing nothing on disk
 # group: [sql]
 
@@ -12,7 +12,7 @@ require parquet
 # assertions; capped_enforce() drives the pass explicitly where needed.
 
 # ---------------------------------------------------------------------------
-# (a) Legacy store (§3.8): a pre-fragment open segment (single complete
+# (a) Legacy store: a pre-fragment open segment (single complete
 # Parquet file, rows > 0, no fragments) is sealed IN PLACE at ATTACH — same
 # path, same rows, no rewrite. A later INSERT then starts a fresh
 # fragment-based open segment; all rows stay readable throughout.
@@ -75,7 +75,7 @@ SELECT maintenance_failures, COALESCE(last_maintenance_error, '<none>') FROM cap
 
 
 # ---------------------------------------------------------------------------
-# (b) Sweep timing (§3.7): a merge queues its inputs as pending deletes at
+# (b) Sweep timing: a merge queues its inputs as pending deletes at
 # not_before = now + grace. Under the default 5-minute grace the files sit
 # on disk even across capped_enforce() — the sweep deletes nothing before
 # its not_before. With the test-only grace override set BEFORE the merge,
@@ -200,7 +200,7 @@ SET capped_pending_delete_grace = '5min'
 
 
 # ---------------------------------------------------------------------------
-# (c) Orphan GC safety (§3.7). Seed: 8 commits (merge queues 0.frag-000000..7
+# (c) Orphan GC safety. Seed: 8 commits (merge queues 0.frag-000000..7
 # at the 5-minute grace), capped_seal (adopts 0.frag-000008.parquet as the
 # sealed segment's file), commit 9 (open segment id 1, one fragment).
 # Then plant, and ATTACH with grace 0 so the age floor passes for fresh

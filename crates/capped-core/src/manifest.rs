@@ -16,10 +16,10 @@ pub struct SegmentId(pub u64);
 
 /// How long a merged or sealed-away fragment lingers in `pending_deletes`
 /// before it may be removed, so in-flight scans (which open files lazily)
-/// can finish reading it (plan §3.7).
+/// can finish reading it.
 pub const DELETE_GRACE: Micros = 5 * 60 * 1_000_000;
 
-/// One immutable Parquet file belonging to the open segment (plan §3.1).
+/// One immutable Parquet file belonging to the open segment.
 /// `seq` is per segment, monotonic, and never reused: merged outputs take a
 /// fresh seq. Every field defaults so fragment-era JSON still loads.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,18 +35,18 @@ pub struct FragmentMeta {
     #[serde(default)]
     pub bytes: u64,
     /// Bounds of the policy time source over this fragment; `None` means
-    /// unknown, which keeps the whole open segment's bound unknown (§3.2).
+    /// unknown, which keeps the whole open segment's bound unknown.
     #[serde(default)]
     pub min_ts: Option<Micros>,
     #[serde(default)]
     pub max_ts: Option<Micros>,
-    /// 0 = written by a commit; n = merged from tier n-1 (plan §3.4).
+    /// 0 = written by a commit; n = merged from tier n-1.
     #[serde(default)]
     pub tier: u8,
 }
 
 /// A file whose deletion is deferred so scans bound to an older manifest can
-/// finish (plan §3.7). Removed once `not_before` has passed.
+/// finish. Removed once `not_before` has passed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingDelete {
     #[serde(default)]
@@ -56,7 +56,7 @@ pub struct PendingDelete {
 }
 
 /// Cumulative per-table write accounting: observability and the T10
-/// amplification gate (plan §3.2).
+/// amplification gate.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WriteStats {
     /// Every Parquet byte capped wrote: fragments, compaction merges, and
@@ -101,20 +101,20 @@ pub struct SegmentMeta {
     pub index_file: Option<String>,
     /// Open segment only: its data files, in insertion order. Empty for sealed
     /// segments (their data is `path`). `path` of an open segment is the
-    /// *planned* sealed path and does not exist on disk (plan §3.1).
+    /// *planned* sealed path and does not exist on disk.
     ///
-    /// A compaction output takes the position of the run it replaced (§3.4),
+    /// A compaction output takes the position of the run it replaced,
     /// so seqs are unique and never reused but are not sorted in list order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fragments: Vec<FragmentMeta>,
     /// The seq the next fragment of this segment should use; seqs are never
-    /// reused (plan §3.1).
+    /// reused.
     #[serde(default)]
     pub next_fragment_seq: u64,
 }
 
 impl SegmentMeta {
-    /// A pre-fragment open segment (plan §3.8): unsealed, no fragments, and
+    /// A pre-fragment open segment: unsealed, no fragments, and
     /// still holding its data at `path`. Migrated by [`Manifest::seal_legacy_open`].
     pub fn is_legacy_open(&self) -> bool {
         !self.sealed && self.fragments.is_empty() && self.rows > 0
@@ -147,12 +147,12 @@ pub struct Manifest {
     pub segments: Vec<SegmentMeta>,
     pub next_segment_id: u64,
     /// Merged/sealed-away fragment files awaiting deletion once the grace
-    /// period passes (plan §3.7). Their bytes are not counted against
+    /// period passes. Their bytes are not counted against
     /// `max_bytes`; they are bounded by roughly one open segment per grace
     /// window.
     #[serde(default)]
     pub pending_deletes: Vec<PendingDelete>,
-    /// Cumulative write accounting (plan §3.2), for observability and the
+    /// Cumulative write accounting, for observability and the
     /// amplification gate.
     #[serde(default)]
     pub write_stats: WriteStats,
@@ -207,7 +207,7 @@ impl Manifest {
     }
 
     /// Insert or replace a segment by id; keeps `next_segment_id` ahead of all ids.
-    /// Rejects states that violate the §3.2 invariants: more than one open
+    /// Rejects states that violate the manifest invariants: more than one open
     /// segment, sealed segments with fragments, open-segment stats that do not
     /// match their fragments, fragment seqs reused or ahead of
     /// `next_fragment_seq`, and a path appearing twice across segments,
@@ -256,10 +256,10 @@ impl Manifest {
         Ok(())
     }
 
-    // ---- fragment mutators (open-segment fragments plan §3.2–§3.5) --------
+    // ---- fragment mutators (docs/open-segments.md) --------------------------
 
-    /// Record a freshly written fragment file on the open segment (plan §3.3
-    /// step 4). The caller has already written the file at `frag.path`; this
+    /// Record a freshly written fragment file on the open segment. The
+    /// caller has already written the file at `frag.path`; this
     /// only makes the manifest name it, updates the open segment's stored
     /// aggregates to match its fragments, and bumps `write_stats`.
     ///
@@ -312,7 +312,7 @@ impl Manifest {
         Ok(())
     }
 
-    /// Apply one size-tiered merge (plan §3.4): replace the contiguous run of
+    /// Apply one size-tiered merge: replace the contiguous run of
     /// same-tier fragments named by `inputs` (seqs, in list order) with the
     /// already-written `output` at the run's position, so insertion order is
     /// preserved. The inputs move to `pending_deletes` with
@@ -407,7 +407,7 @@ impl Manifest {
     }
 
     /// Seal the open segment whose fragments the caller has just merged (or
-    /// adopted) into the final file (plan §3.5). `output` carries the final
+    /// adopted) into the final file. `output` carries the final
     /// path and the **exact** stats computed from that file; `rows` must match
     /// the fragments being replaced — a seal never loses or gains rows.
     ///
@@ -415,7 +415,7 @@ impl Manifest {
     /// `path = output.path`, fragments cleared). Fragment files move to
     /// `pending_deletes`, except a fragment whose path is reused as the output
     /// path — the single-fragment fast path that adopts the file without
-    /// rewriting it (plan §3.5 step 3), which therefore adds nothing to
+    /// rewriting it, which therefore adds nothing to
     /// `bytes_written`/`files_written`. `bytes_sealed` counts the output in
     /// both cases.
     pub fn seal_open(&mut self, segment: SegmentId, output: &SegmentMeta, now: Micros) -> Result<(), String> {
@@ -490,7 +490,7 @@ impl Manifest {
         Ok(())
     }
 
-    /// Queue a file for deferred deletion (plan §3.7). Rejects any path the
+    /// Queue a file for deferred deletion. Rejects any path the
     /// manifest still references — this is what makes the GC rule "never
     /// delete a referenced file" hold by construction.
     pub fn queue_delete(&mut self, path: impl Into<String>, not_before: Micros) -> Result<(), String> {
@@ -513,7 +513,7 @@ impl Manifest {
     }
 
     /// Remove and return the paths whose grace period has elapsed; the shell
-    /// deletes those files after the manifest swap (plan §3.7). Order is kept.
+    /// deletes those files after the manifest swap. Order is kept.
     pub fn take_due_deletes(&mut self, now: Micros) -> Vec<String> {
         let mut due = Vec::new();
         self.pending_deletes.retain(|d| {
@@ -527,12 +527,12 @@ impl Manifest {
         due
     }
 
-    /// Whether the open segment is a pre-fragment (legacy) one, plan §3.8.
+    /// Whether the open segment is a pre-fragment (legacy) one.
     pub fn is_legacy_open(&self) -> bool {
         self.open_segment().is_some_and(SegmentMeta::is_legacy_open)
     }
 
-    /// Migrate a legacy open segment in place (plan §3.8): it is already a
+    /// Migrate a legacy open segment in place: it is already a
     /// complete Parquet file at its `path`, so sealing just flips the flag —
     /// no rewrite, no new name, no bytes counted in `write_stats`. The next
     /// insert starts a fresh fragment-based open segment.
@@ -562,7 +562,7 @@ impl Manifest {
     }
 
     /// Is `path` named by any segment (other than `skip_id`) or its fragments,
-    /// or sitting in `pending_deletes`? (§3.2: a path appears at most once.)
+    /// or sitting in `pending_deletes`? (a path appears at most once.)
     fn path_taken(&self, path: &str, skip_id: Option<SegmentId>) -> bool {
         self.pending_deletes.iter().any(|d| d.path == path)
             || self.segments.iter().any(|s| {
@@ -588,7 +588,7 @@ impl Manifest {
     }
 }
 
-/// The aggregate stats a fragment list implies for its open segment (§3.2).
+/// The aggregate stats a fragment list implies for its open segment.
 /// A bound that is unknown on any fragment makes the aggregate unknown: a
 /// made-up bound would silently evict live data. An empty list is (0,0,None,None).
 fn fragment_aggregates(fragments: &[FragmentMeta]) -> (u64, u64, Option<Micros>, Option<Micros>) {
@@ -614,7 +614,7 @@ fn fragment_aggregates(fragments: &[FragmentMeta]) -> (u64, u64, Option<Micros>,
     (rows, bytes, min_ts, max_ts)
 }
 
-/// The per-segment half of the §3.2 invariants: sealed segments have no
+/// The per-segment half of the manifest invariants: sealed segments have no
 /// fragments; fragment seqs are unique and below `next_fragment_seq` (they
 /// are never reused); with fragments present, the stored open-segment stats
 /// equal their aggregate.
@@ -761,7 +761,7 @@ pub(crate) mod tests {
         assert_eq!(m, back);
     }
 
-    // ---- open-segment fragments (plan T1) ---------------------------------
+    // ---- open-segment fragments -------------------------------------------
 
     /// A fragment as the shell would name it: `<seg>.frag-<seq:06>.parquet`.
     pub(crate) fn frag(
@@ -890,7 +890,7 @@ pub(crate) mod tests {
         let s = m.open_segment().unwrap();
         assert_eq!((s.rows, s.bytes, s.min_ts, s.max_ts), (8, 150, Some(5), Some(30)));
         // An unknown bound on any fragment makes the open segment's bound
-        // unknown: never age-droppable rather than guessed (§3.2).
+        // unknown: never age-droppable rather than guessed.
         m.add_fragment(SegmentId(3), frag(3, 2, 0, 1, 60, None)).unwrap();
         let s = m.open_segment().unwrap();
         assert_eq!((s.rows, s.bytes, s.min_ts, s.max_ts), (9, 210, None, None));
@@ -1067,7 +1067,7 @@ pub(crate) mod tests {
         let mut m = manifest(vec![]);
         m.put_segment(fresh_open(6)).unwrap();
         m.add_fragment(SegmentId(6), frag(6, 0, 0, 4, 111, Some((7, 9)))).unwrap();
-        // Fast path (§3.5 step 3): the fragment file *becomes* the sealed file.
+        // Fast path: the fragment file *becomes* the sealed file.
         let output = sealed_output(6, "t/6.frag-000000.parquet", 4, 111, 7, 9);
         m.seal_open(SegmentId(6), &output, 77).unwrap();
         let s = &m.segments[0];

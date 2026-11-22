@@ -386,7 +386,7 @@ string RemoveSegmentsFfi(const string &manifest_json, const vector<int64_t> &ids
 	}, "removing segments");
 }
 
-// --- fragment write path helpers (fragments plan §3.3–§3.5) ------------------
+// --- fragment write path helpers ------------------
 
 string AddFragmentFfi(const string &manifest_json, int64_t segment, const string &fragment_json) {
 	return FfiStr([&](char **out, char **err) {
@@ -420,7 +420,7 @@ string FragmentJson(int64_t seq, const string &rel_path, int64_t rows, int64_t b
 	       ",\"max_ts\":" + bound(has_ts, max_ts) + ",\"tier\":" + to_string(tier) + "}";
 }
 
-//! Fragment file naming (plan §3.1): <segment_id>.frag-<seq zero-padded to 6>.
+//! Fragment file naming: <segment_id>.frag-<seq zero-padded to 6>.
 string FragmentRelPath(const string &table, int64_t segment, int64_t seq) {
 	auto digits = to_string(seq);
 	if (digits.size() < 6) {
@@ -465,7 +465,7 @@ FragmentMergePlan ParseMergePlan(const string &plan_json) {
 
 //! Does the manifest reference `path` (segment data, fragments, index files,
 //! pending deletes)? Used by the seal to decide whether the planned sealed
-//! path is occupied (plan §3.5 step 2).
+//! path is occupied.
 bool ManifestOwnsPath(const string &manifest_json, const string &path) {
 	auto paths_json = FfiStr(
 	    [&](char **out, char **err) { return capped_manifest_owned_paths(manifest_json.c_str(), out, err); },
@@ -491,16 +491,16 @@ bool ManifestOwnsPath(const string &manifest_json, const string &path) {
 //! consumes a fragment seq (or plans a sealed path) only when it lands, so
 //! a collision would be retried, and fail, on every later commit. Skipped
 //! leftovers are unreferenced pattern matches; the ATTACH GC collects them
-//! later (§3.7).
+//! later.
 bool PathOccupied(CappedCatalog &catalog, const string &abs_path) {
 	auto &fs = catalog.FS();
 	return fs.FileExists(abs_path) || fs.DirectoryExists(abs_path);
 }
 
-//! Next fragment seq at or after start_seq whose final path is free on disk
-//! (§3.3/§3.4). add_fragment/apply_compaction accept any seq >= the
+//! Next fragment seq at or after start_seq whose final path is free on disk.
+//! add_fragment/apply_compaction accept any seq >= the
 //! segment's next_fragment_seq, so skipped seqs are simply burned — and
-//! never reused (§3.2). Only the candidate path is checked, never the whole
+//! never reused. Only the candidate path is checked, never the whole
 //! directory: one stat per probe, not one listing per candidate.
 int64_t NextFreeFragmentSeq(CappedCatalog &catalog, const string &table, int64_t segment, int64_t start_seq) {
 	auto &root = catalog.Storage().Root();
@@ -511,13 +511,13 @@ int64_t NextFreeFragmentSeq(CappedCatalog &catalog, const string &table, int64_t
 	}
 }
 
-//! Planned sealed path for a fresh open segment (§3.1): the reserved
+//! Planned sealed path for a fresh open segment: the reserved
 //! <id>.seg.parquet, or the reserved unique <id>.seg-<micros>.parquet when
 //! that name is taken on disk or by the manifest. A file adopted through
 //! capped_add_segment can own a name a much later open segment would pick,
 //! and segment ids are never reused — without this a wedge there would fail
 //! every later INSERT (T9). Both forms match the orphan-GC patterns, so a
-//! crash leftover here stays collectable (§3.7).
+//! crash leftover here stays collectable.
 string PlannedSealRelPath(CappedCatalog &catalog, const string &table, int64_t segment,
                           const string &manifest_json) {
 	auto &root = catalog.Storage().Root();
@@ -546,7 +546,7 @@ string SealOpenFfi(const string &manifest_json, const string &output_segment_jso
 	}, "sealing open segment");
 }
 
-//! Pending-delete grace from the Rust core (fragments plan §3.2): a queued
+//! Pending-delete grace from the Rust core: a queued
 //! delete becomes sweepable DELETE_GRACE after it was queued, and orphan GC
 //! never collects a candidate younger than it.
 int64_t CappedDeleteGraceMicros() {
@@ -564,8 +564,8 @@ int64_t CappedDeleteGraceMicros() {
 //! Rust DELETE_GRACE. Test-only knob: it changes the age floor GC applies and
 //! the grace NEWLY queued deletes get — not_before values already written
 //! into a manifest are honoured exactly as stored.
-//! Grammar of the capped_pending_delete_grace setting (fragments plan §3.7
-//! test knob): a number with a unit suffix — us/micro(s|second)(s),
+//! Grammar of the capped_pending_delete_grace setting (a test
+//! knob): a number with a unit suffix — us/micro(s|second)(s),
 //! ms/milli(s|second)(s), s/sec(ond)(s), m/min(ute)(s), h/hr(s)/hour(s),
 //! d/day(s), case-insensitive, optional spaces — or a bare number of
 //! microseconds; "0" means "collect immediately". False on anything else.
@@ -662,9 +662,9 @@ vector<string> ParseStringArray(const string &json, const string &what) {
 }
 
 //! Does a top-level file name match one of the four capped-owned leftover
-//! patterns orphan GC may collect (fragments plan §3.7)? Everything else —
+//! patterns orphan GC may collect? Everything else —
 //! user parquet, other extensions, odd shapes — is untouchable, and
-//! "<id>.seg.parquet" (a planned path, §4 crash table) counts only for the
+//! "<id>.seg.parquet" (a planned path) counts only for the
 //! CURRENT open segment: a sealed segment's <id>.seg.parquet is live data.
 bool MatchesOrphanGcPattern(const string &name, const string &open_segment_id) {
 	auto all_digits = [](const string &s) {
@@ -692,7 +692,7 @@ bool MatchesOrphanGcPattern(const string &name, const string &open_segment_id) {
 	    all_digits(rest.substr(5, rest.size() - 5 - parquet_suffix.size()))) {
 		return true;
 	}
-	// <id>.seg-<digits>.parquet: the seal fallback name (§3.5)
+	// <id>.seg-<digits>.parquet: the seal fallback name
 	if (rest.rfind("seg-", 0) == 0 && rest.size() > 4 + parquet_suffix.size() &&
 	    rest.compare(rest.size() - parquet_suffix.size(), parquet_suffix.size(), parquet_suffix) == 0 &&
 	    all_digits(rest.substr(4, rest.size() - 4 - parquet_suffix.size()))) {
@@ -720,7 +720,7 @@ int64_t FileModifiedMicros(const string &abs_path) {
 #endif
 }
 
-//! Pending-delete sweep (fragments plan §3.7). The manifest is the commit
+//! Pending-delete sweep. The manifest is the commit
 //! point: due paths leave pending_deletes in one atomic swap FIRST, and only
 //! then are the files removed — a crash in between leaves unreferenced files
 //! on disk that the ATTACH-time orphan GC collects later. A file already gone
@@ -758,7 +758,7 @@ void SweepUnlocked(CappedCatalog &catalog, const string &table) {
 	}
 }
 
-//! Orphan GC (fragments plan §3.7), ATTACH only — the most dangerous code
+//! Orphan GC, ATTACH only — the most dangerous code
 //! in the extension, so every rule here is a guard against deleting live
 //! data: top level of the table directory only (no recursion); names matching
 //! one capped-owned leftover pattern exactly; never anything the manifest
@@ -824,13 +824,13 @@ void OrphanGcUnlocked(CappedCatalog &catalog, const string &table, const string 
 	}
 }
 
-//! Seal = final compaction (plan §3.5), shared by FlushBuffer, EnforceUnlocked
+//! Seal = final compaction, shared by FlushBuffer, EnforceUnlocked
 //! and ForceSeal. The open segment's fragments are merged into one file at the
 //! planned path — or adopted as-is when there is exactly one fragment (free
 //! seal) — with stats recomputed from the output so sealed stats stay exact;
 //! then the manifest swap commits. A crash before that swap leaves only an
-//! unreferenced `<id>.seg*.parquet` (removed by the ATTACH GC, plan §4). A
-//! legacy (pre-fragment) open segment is migrated in place instead (§3.8).
+//! unreferenced `<id>.seg*.parquet` (removed by the ATTACH GC). A
+//! legacy (pre-fragment) open segment is migrated in place instead.
 //! Assumes the catalog write lock is held. Returns false when there is nothing
 //! to seal (no open segment, or an empty fresh one).
 bool SealOpenUnlocked(CappedCatalog &catalog, const string &table) {
@@ -851,7 +851,7 @@ bool SealOpenUnlocked(CappedCatalog &catalog, const string &table) {
 		if (open->rows == 0) {
 			return false; // fresh open segment: nothing has been written yet
 		}
-		// legacy open segment (plan §3.8): complete Parquet file already at
+		// legacy open segment: complete Parquet file already at
 		// its path, so migration only flips the seal flag
 		manifest = SealLegacyOpenFfi(manifest, CappedNowMicros() + GraceQueueOffset(catalog));
 		storage.WriteManifest(fs, table, manifest);
@@ -867,7 +867,7 @@ bool SealOpenUnlocked(CappedCatalog &catalog, const string &table) {
 	} else {
 		// output path: the planned one, or the reserved unique fallback when
 		// that name is taken on disk (file or directory, see PathOccupied)
-		// or by the manifest — never overwrite (§3.1)
+		// or by the manifest — never overwrite
 		output_rel = open->path;
 		if (PathOccupied(catalog, storage.Root() + "/" + output_rel) || ManifestOwnsPath(manifest, output_rel)) {
 			auto stamp = now;
@@ -943,7 +943,7 @@ CappedEnforceSummary EnforceUnlocked(CappedCatalog &catalog, const string &table
 	auto now = CappedNowMicros();
 	auto segments = CappedReadSegments(manifest);
 
-	// pending-delete sweep (§3.7): files past their not_before go first,
+	// pending-delete sweep: files past their not_before go first,
 	// before this pass can publish any further manifest
 	SweepUnlocked(catalog, table);
 	manifest = storage.ReadManifest(fs, table);
@@ -1029,7 +1029,7 @@ void CappedWrite::FlushBuffer(ClientContext &context, CappedCatalog &catalog, Co
 	}
 
 	// a legacy (pre-fragment) open segment cannot take fragments: migrate it
-	// first (plan §3.8) and start this commit on a fresh fragment-based one
+	// first and start this commit on a fresh fragment-based one
 	if (open && open->fragments == 0 && open->rows > 0) {
 		manifest = SealLegacyOpenFfi(manifest, CappedNowMicros() + GraceQueueOffset(catalog));
 		storage.WriteManifest(fs, buffer.table, manifest);
@@ -1045,7 +1045,7 @@ void CappedWrite::FlushBuffer(ClientContext &context, CappedCatalog &catalog, Co
 	auto seq = NextFreeFragmentSeq(catalog, buffer.table, seg_id, open ? NextFragmentSeq(manifest) : 0);
 
 	// the commit's rows become one new immutable fragment: only the fresh
-	// rows are written, existing data is never re-read (plan §3.3 step 1).
+	// rows are written, existing data is never re-read.
 	// Written to a temp name and renamed, so a crash can never leave a
 	// half-written file the manifest could name.
 	auto frag_rel = FragmentRelPath(buffer.table, seg_id, seq);
@@ -1085,7 +1085,7 @@ void CappedWrite::FlushBuffer(ClientContext &context, CappedCatalog &catalog, Co
 	}
 
 	// publish: the fragment file lands under its final (still unreferenced)
-	// name first, then the manifest rename — the single commit point (plan §4)
+	// name first, then the manifest rename — the single commit point
 	fs.MoveFile(tmp_abs, frag_abs);
 	tmp_guard.Commit();
 	storage.WriteManifest(fs, buffer.table, candidate);
@@ -1103,8 +1103,8 @@ void CappedWrite::FlushBuffer(ClientContext &context, CappedCatalog &catalog, Co
 		}
 	}
 
-	// Maintenance: minor compaction (plan §3.4) and the seal check (§3.3
-	// step 8). The commit is already durable above, so a hiccup here must not
+	// Maintenance: minor compaction and the seal check. The commit is
+	// already durable above, so a hiccup here must not
 	// surface as a commit error — the rows are published and the next commit,
 	// enforce pass, or background sweep retries the step. Each step keeps its
 	// own write → manifest-swap commit point; unpublished outputs are deleted.
@@ -1125,7 +1125,7 @@ void CappedWrite::FlushBuffer(ClientContext &context, CappedCatalog &catalog, Co
 			// and fail, forever — the manifest only consumes a seq when it
 			// lands), so take the next free one. The blocked natural seq is
 			// surfaced as a maintenance failure: a merge silently rerouting
-			// around planted names would hide a real problem (§3.4, T9).
+			// around planted names would hide a real problem.
 			auto want_seq = NextFragmentSeq(candidate);
 			auto out_seq = want_seq;
 			while (PathOccupied(catalog, storage.Root() + "/" +
@@ -1178,7 +1178,7 @@ void CappedWrite::FlushBuffer(ClientContext &context, CappedCatalog &catalog, Co
 		// enforce pass retries the merges (and surfaces the failure)
 		record_maintenance_failure("fragment compaction", ex);
 	}
-	// the file-count trigger (§5 T6) and the size/row/span seal each run even
+	// the file-count trigger and the size/row/span seal each run even
 	// when the other steps failed in this pass
 	try {
 		int32_t frag_seal = 0;
@@ -1197,7 +1197,7 @@ void CappedWrite::FlushBuffer(ClientContext &context, CappedCatalog &catalog, Co
 	} catch (std::exception &ex) {
 		record_maintenance_failure("seal", ex);
 	}
-	// the pending-delete sweep (§3.7) runs even when a step above failed in
+	// the pending-delete sweep runs even when a step above failed in
 	// this pass, and deletes nothing before its not_before
 	try {
 		SweepUnlocked(catalog, buffer.table);
@@ -1254,7 +1254,7 @@ void CappedWrite::AttachMaintenance(CappedCatalog &catalog, const string &table)
 	auto &storage = catalog.Storage();
 	auto manifest = storage.ReadManifest(fs, table);
 
-	// 1. lazy legacy migration (§3.8): a pre-fragment open segment holds a
+	// 1. lazy legacy migration: a pre-fragment open segment holds a
 	// complete Parquet file at its path, so seal it in place — same path,
 	// same rows, no rewrite, no new file. Re-read after, so sweep and GC see
 	// the migrated state.
@@ -1268,7 +1268,7 @@ void CappedWrite::AttachMaintenance(CappedCatalog &catalog, const string &table)
 		storage.WriteManifest(fs, table, manifest);
 	}
 
-	// 2. pending-delete sweep: manifest first, then the files (§3.7)
+	// 2. pending-delete sweep: manifest first, then the files
 	SweepUnlocked(catalog, table);
 
 	// 3. orphan GC, only now — after the manifest is final for this ATTACH

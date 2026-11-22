@@ -1,5 +1,5 @@
 # name: test/sql/capped_fragments_e2e.test
-# description: fragments end-to-end (open-segment fragments plan §5 T9): content
+# description: fragments end-to-end: content
 #              survives compaction and seal, disk files match the manifest, TTL
 #              eviction of a fragmented ingest-time segment, fts across
 #              merged-away fragments, blocked commits leave nothing behind, and

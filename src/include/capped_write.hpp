@@ -52,7 +52,7 @@ struct CappedSegmentInfo {
 	int64_t max_ts = 0;
 	bool sealed = false;
 	//! Fragment count of the open segment (0 for sealed segments; a legacy
-	//! open segment has 0 fragments but rows > 0 — plan §3.2/§3.8).
+	//! open segment has 0 fragments but rows > 0).
 	int64_t fragments = 0;
 	//! The files a scan reads, in order (capped_manifest_list_segments
 	//! "files"): [path] for sealed / legacy open, the fragment paths for a
@@ -85,7 +85,7 @@ struct CappedPolicySummary {
 CappedPolicySummary CappedReadPolicySummary(const string &manifest_json);
 
 //! Table-level accounting from capped_manifest_stats: cumulative Parquet bytes
-//! capped wrote for this table, and files queued in pending_deletes (§3.9).
+//! capped wrote for this table, and files queued in pending_deletes.
 struct CappedManifestStats {
 	int64_t bytes_written = 0;
 	int64_t pending_delete_files = 0;
@@ -134,7 +134,7 @@ struct CappedWrite {
 	//! the table is still over a hard cap.
 	static CappedEnforceSummary Enforce(CappedCatalog &catalog, const string &table);
 
-	//! ATTACH maintenance for one table (fragments plan §3.7/§3.8): seal a
+	//! ATTACH maintenance for one table: seal a
 	//! legacy open segment in place, sweep due pending deletes (manifest
 	//! first, then files), then collect orphan crash leftovers. Never run it
 	//! under a READ_ONLY ATTACH. Delete errors are recorded via

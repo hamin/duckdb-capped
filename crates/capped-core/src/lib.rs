@@ -15,7 +15,7 @@
 //! - [`eviction`] — pure planning: given a manifest and a clock reading, which
 //!   segments should be dropped, and when the open segment should be sealed.
 //! - [`compaction`] — pure planning: which adjacent fragment run to merge next
-//!   in an open segment (size-tiered, see the open-segment fragments plan).
+//!   in an open segment (size-tiered, see docs/open-segments.md).
 //!
 //! The DuckDB-facing layer (`ATTACH ... (TYPE capped)`, catalog, insert/scan
 //! paths, and running plans against real files) lives outside this crate; see

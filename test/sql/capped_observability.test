@@ -1,5 +1,5 @@
 # name: test/sql/capped_observability.test
-# description: observability columns from the fragments plan (§3.9):
+# description: observability columns for open-segment fragments (docs/open-segments.md):
 #              capped_status.fragments, capped_tables.bytes_written and
 #              capped_tables.pending_delete_files
 # group: [sql]

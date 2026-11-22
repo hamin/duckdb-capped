@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Write-amplification gate (open-segment fragments plan §5 T10).
+# Write-amplification gate for the open-segment fragment path (docs/open-segments.md).
 #
 # 720 separately committed INSERT batches of ~2 KB raw row data each —
 # lotel's 5-second commit cadence over an hour — then capped_seal. Two gates
@@ -11,7 +11,7 @@
 # an extra rewrite. The old whole-open-segment rewrite is estimated for the
 # record at ~(N+1)/2 (≈360x).
 #
-# Usage: scripts/amplification.sh   (from capped/shell after `GEN=ninja make release`)
+# Usage: scripts/amplification.sh   (after `GEN=ninja make release`)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -45,7 +45,7 @@ trap 'rm -f "$SQL_FILE" "$ERR_LOG"' EXIT
     echo "SELECT rows, bytes, bytes_written FROM capped_tables('amp') WHERE table_name = 'logs';"
 } > "$SQL_FILE"
 
-echo "== write amplification gate (fragments plan §5 T10) =="
+echo "== write amplification gate =="
 echo "store:   $STORE"
 echo "commits: $BATCHES separate INSERT batches of ~2 KB raw, then capped_seal"
 echo
