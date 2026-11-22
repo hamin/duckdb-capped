@@ -5,7 +5,7 @@
 # the commit sha pushed to https://github.com/hamin/duckdb-capped.
 extension:
   name: capped
-  description: Bounded storage for DuckDB — telemetry tables that forget, with retention by age (ttl), size (max_bytes), or row count (max_rows) over immutable Parquet segments
+  description: "Tables that forget: retention by age, size or row count over immutable Parquet files"
   version: 0.1.0
   language: "C++ & Rust"
   build: cmake
@@ -20,7 +20,7 @@ extension:
 
 repo:
   github: hamin/duckdb-capped
-  ref: "<commit-sha-after-push>"
+  ref: 309d2a56037760cd5427b07dc42221b0db084a8c
 
 docs:
   hello_world: |
@@ -33,13 +33,20 @@ docs:
     SELECT severity, body FROM t.main.events;
 
   extended_description: |
-    capped is a DuckDB storage extension for telemetry data (logs, metrics,
-    traces, events): each table is created with caps — `ttl`, `max_bytes` and
-    `max_rows` — and data appends in while the oldest data flows out when a
-    table gets too old, too big, or too full. Each table is a sequence of
-    immutable Parquet segment files plus one open segment, read by DuckDB's own
-    parquet reader, so retention deletes whole sealed segment files: the cost
-    scales with the number of files removed and data is never rewritten.
-    Retention runs at ATTACH, on every write and on a background thread, and
-    tables can optionally build per-segment full-text and vector indexes
-    answered by `capped_fts` and `capped_vector_search`.
+    capped gives DuckDB tables that forget. You set a limit on each table when
+    you create it: how old rows may get (`ttl`), how big the table may grow
+    (`max_bytes`), or how many rows it may hold (`max_rows`). New rows keep
+    coming in, and the oldest data is removed whenever a limit is passed.
+
+    It is built for telemetry such as logs, traces, metrics and events, where
+    nobody needs last month's data and nobody wants to schedule cleanup jobs.
+
+    Each table is stored as a series of immutable Parquet files. Removing old
+    data means deleting whole files, so nothing is rewritten, no space is
+    left behind, and size limits are exact. Queries go through DuckDB's own
+    Parquet reader, so filters and pushdown work as usual.
+
+    Retention runs when a store is attached, on every write, and on a
+    background thread. Tables can also opt in to full-text and vector search
+    (`capped_fts`, `capped_vector_search`), and the indexes are removed along
+    with the data they cover.
