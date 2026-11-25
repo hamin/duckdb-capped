@@ -10,8 +10,11 @@ EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 # .duckdb_extension gets a hash stamp too. Pin the describe output so the
 # build behaves like the v2.0.0 release (what the submodules are checked out
 # at). Override for off-tag builds: `OVERRIDE_GIT_DESCRIBE=... make ...`.
-# (docs/updating-duckdb.md §2)
-OVERRIDE_GIT_DESCRIBE ?= v2.0.0
+# In CI, extension-ci-tools exports DUCKDB_VERSION (e.g. v2.0.1 in the
+# community-extensions build, which links a prebuilt libduckdb of that
+# version); follow it so both the extension stamp and the fts/vss stage
+# directory match the DuckDB we actually link. (docs/updating-duckdb.md §2)
+OVERRIDE_GIT_DESCRIBE ?= $(or $(DUCKDB_VERSION),v2.0.0)
 
 # The search tests LOAD fts/vss, which are remote extensions. The 2.0 test
 # harness swaps HOME for a fresh per-run temp dir, so ~/.duckdb is invisible

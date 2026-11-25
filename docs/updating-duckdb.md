@@ -13,7 +13,7 @@ Four places name the DuckDB version, and they must agree:
 | `duckdb` submodule | the new release tag |
 | `extension-ci-tools` submodule | the matching branch (for v2.0.0 it is `v2.0-cyanoptera`) |
 | `.github/workflows/MainDistributionPipeline.yml` | `duckdb_version`, `ci_tools_version`, and the `@ref` of the reusable workflow |
-| `Makefile` | `OVERRIDE_GIT_DESCRIBE ?= <tag>` |
+| `Makefile` | the fallback tag in `OVERRIDE_GIT_DESCRIBE ?= $(or $(DUCKDB_VERSION),<tag>)` |
 
 The extension-ci-tools ref is a **branch**, not a tag, so a plain
 `git checkout` of it fails in a shallow clone. Fetch it explicitly:
@@ -39,6 +39,14 @@ then break: the official `fts` and `vss` builds refuse to load ("built
 specifically for DuckDB version 'v2.0.0'"), and `capped.duckdb_extension`
 gets a hash stamp instead of the release version. DuckDB's own CI sets the
 same override for shallow checkouts.
+
+The pin is only a fallback for local builds. In CI, extension-ci-tools exports
+`DUCKDB_VERSION`, and the Makefile uses it instead. That matters for the
+community-extensions build: it links a prebuilt libduckdb of whatever release
+it targets (v2.0.1 at the time of writing), not our submodule. A hard
+`v2.0.0` there would stamp capped with the wrong version and stage fts/vss
+into `remote-extensions/v2.0.0/` while the binary looks in `v2.0.1/`, so the
+search tests fail with "Extension ... not found".
 
 ## 3. The search tests need the official fts and vss builds
 
