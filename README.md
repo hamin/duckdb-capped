@@ -23,7 +23,8 @@ SELECT count(*) FROM tlog.main.events WHERE severity = 'error';  -- Parquet push
 SELECT * FROM capped_status('tlog', 'events');  -- segments, sizes, caps
 ```
 
-Requires DuckDB **v2.0.0** on Linux or macOS.
+Available from DuckDB's [community extensions](https://duckdb.org/community_extensions/extensions/capped)
+for DuckDB **v2.0.1** on Linux and macOS.
 
 ## How it works
 
@@ -55,16 +56,18 @@ The full design, prior art and trade-offs are in
 
 ## Install
 
-capped is being submitted to DuckDB's community extensions. Once it is
-listed:
+capped is a [DuckDB community extension](https://duckdb.org/community_extensions/extensions/capped).
+In DuckDB v2.0.1 on Linux or macOS (arm64 or x86_64):
 
 ```sql
 INSTALL capped FROM community;
 LOAD capped;
 ```
 
-Until then, [build it from source](#building-from-source) and load the
-unsigned build: `duckdb -unsigned -c "LOAD 'build/release/extension/capped/capped.duckdb_extension'"`.
+To run your own build instead, [build it from source](#building-from-source)
+and load it unsigned: `duckdb -unsigned -c "LOAD 'build/release/extension/capped/capped.duckdb_extension'"`.
+A source build targets the DuckDB version pinned in the `duckdb` submodule
+(currently v2.0.0), so load it with that version's CLI.
 
 ## SQL reference
 
