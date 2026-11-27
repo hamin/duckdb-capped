@@ -1,6 +1,6 @@
 # Updating to a new DuckDB release
 
-capped builds against one pinned DuckDB release (currently **v2.0.0**). The
+capped builds against one pinned DuckDB release (currently **v2.0.1**). The
 Rust core (`crates/capped-core`) has no DuckDB dependency, so a DuckDB bump
 only touches the C++ code in `src/`, the submodules and CI.
 
@@ -11,7 +11,7 @@ Four places name the DuckDB version, and they must agree:
 | Where | What to set |
 |---|---|
 | `duckdb` submodule | the new release tag |
-| `extension-ci-tools` submodule | the matching branch (for v2.0.0 it is `v2.0-cyanoptera`) |
+| `extension-ci-tools` submodule | the matching branch (for v2.0.x it is `v2.0-cyanoptera`) |
 | `.github/workflows/MainDistributionPipeline.yml` | `duckdb_version`, `ci_tools_version`, and the `@ref` of the reusable workflow |
 | `Makefile` | the fallback tag in `OVERRIDE_GIT_DESCRIBE ?= $(or $(DUCKDB_VERSION),<tag>)` |
 

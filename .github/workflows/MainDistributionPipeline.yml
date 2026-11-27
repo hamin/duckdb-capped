@@ -4,7 +4,7 @@
 # so build_directory stays at its default ".".
 #
 # duckdb_version / ci_tools_version are pinned to match the git submodules
-# (duckdb v2.0.0, extension-ci-tools v2.0-cyanoptera) — bump all three together.
+# (duckdb v2.0.1, extension-ci-tools v2.0-cyanoptera) — bump all three together.
 #
 # The sqllogictests run through the workflow's Test phase: it calls
 # `make test_release` from the repo root, which the root Makefile gates on the
@@ -34,7 +34,7 @@ jobs:
     name: Build and test extension
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
     with:
-      duckdb_version: v2.0.0
+      duckdb_version: v2.0.1
       ci_tools_version: v2.0-cyanoptera
       extension_name: capped
       # CMakeLists.txt shells out to `cargo build -p capped-core`; this installs

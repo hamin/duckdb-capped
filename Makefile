@@ -4,17 +4,17 @@ PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 EXT_NAME=capped
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 
-# DuckDB 2.0 stamps a shallow-checkout submodule build as v2.0.0-dev<commits>,
-# using the commit hash as its extension version — official v2.0.0 extensions
+# DuckDB 2.0 stamps a shallow-checkout submodule build as v2.0.1-dev<commits>,
+# using the commit hash as its extension version — official v2.0.1 extensions
 # (the fts/vss the search tests LOAD) then refuse to load, and capped's own
 # .duckdb_extension gets a hash stamp too. Pin the describe output so the
-# build behaves like the v2.0.0 release (what the submodules are checked out
+# build behaves like the v2.0.1 release (what the submodules are checked out
 # at). Override for off-tag builds: `OVERRIDE_GIT_DESCRIBE=... make ...`.
-# In CI, extension-ci-tools exports DUCKDB_VERSION (e.g. v2.0.1 in the
-# community-extensions build, which links a prebuilt libduckdb of that
-# version); follow it so both the extension stamp and the fts/vss stage
+# In CI, extension-ci-tools exports DUCKDB_VERSION (the community-extensions
+# build sets it to the release it targets and links a prebuilt libduckdb of
+# that version); follow it so both the extension stamp and the fts/vss stage
 # directory match the DuckDB we actually link. (docs/updating-duckdb.md §2)
-OVERRIDE_GIT_DESCRIBE ?= $(or $(DUCKDB_VERSION),v2.0.0)
+OVERRIDE_GIT_DESCRIBE ?= $(or $(DUCKDB_VERSION),v2.0.1)
 
 # The search tests LOAD fts/vss, which are remote extensions. The 2.0 test
 # harness swaps HOME for a fresh per-run temp dir, so ~/.duckdb is invisible

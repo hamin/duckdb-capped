@@ -42,10 +42,10 @@ Before calling a change done: `cargo test` and clippy for Rust changes,
 
 ## Rules
 
-- **DuckDB is pinned to v2.0.0.** The `duckdb` submodule sits at the tag,
+- **DuckDB is pinned to v2.0.1.** The `duckdb` submodule sits at the tag,
   `extension-ci-tools` at `v2.0-cyanoptera`, and
   `.github/workflows/MainDistributionPipeline.yml` passes the same pair. Move
-  them together. The Makefile's `OVERRIDE_GIT_DESCRIBE ?= v2.0.0` is what makes
+  them together. The Makefile's `OVERRIDE_GIT_DESCRIBE` fallback (v2.0.1) is what makes
   a shallow submodule build behave like the release; don't remove it
   (`docs/updating-duckdb.md`).
 - **Only JSON strings and primitives cross the FFI.** Strings returned by Rust

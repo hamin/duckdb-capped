@@ -67,7 +67,7 @@ LOAD capped;
 To run your own build instead, [build it from source](#building-from-source)
 and load it unsigned: `duckdb -unsigned -c "LOAD 'build/release/extension/capped/capped.duckdb_extension'"`.
 A source build targets the DuckDB version pinned in the `duckdb` submodule
-(currently v2.0.0), so load it with that version's CLI.
+(currently v2.0.1), so load it with that version's CLI.
 
 ## SQL reference
 
