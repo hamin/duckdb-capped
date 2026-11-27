@@ -282,7 +282,8 @@ INSERT INTO cs.main.searchable VALUES
     run "ATTACH '$STORE' AS cs (TYPE capped); SELECT * FROM capped_seal('cs','searchable');" >/dev/null
     SEALED="$(scalar "ATTACH '$STORE' AS cs (TYPE capped); SELECT count(*) FROM capped_status('cs','searchable') WHERE indexed;")"
     [[ "$SEALED" == "1" ]] || { echo "FAIL: sealing did not build the index"; exit 1; }
-    [[ -f "$STORE/searchable/0.seg.idx.duckdb" ]] || { echo "FAIL: no index file next to the segment"; exit 1; }
+    # a single-fragment seal keeps the fragment's file name: 0.frag-000000.seg.idx.duckdb
+    compgen -G "$STORE/searchable/0.*seg.idx.duckdb" >/dev/null || { echo "FAIL: no index file next to the segment"; exit 1; }
     HIT="$(scalar "ATTACH '$STORE' AS cs (TYPE capped); SELECT msg FROM capped_fts('cs','searchable','payment gateway');")"
     [[ "$HIT" == connection* ]] || { echo "FAIL: fts found '$HIT'"; exit 1; }
     K="$(scalar "ATTACH '$STORE' AS cs (TYPE capped); SELECT count(*) FROM capped_fts('cs','searchable','connection', k := 1);")"
